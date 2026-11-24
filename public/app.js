@@ -2,13 +2,14 @@
 
 /* ---------------- constants ---------------- */
 const LS_KEY = 'scheduler.state.v3';
-const SLOT_MIN = 30; // 內部精度：半小時；畫面一小時一格
-const SHARE_PREFIX = 'j2.';
-const SHARE_PREFIX_V1 = 'j1.';
+const SLOT_MIN = 30; // internal resolution: 30 minutes, rendered as one hour per column pair
+const SHARE_PREFIX = 'j3.';       // compact JSON + deflate-raw
+const SHARE_PREFIX_PLAIN = 'j2.'; // compact JSON, no compression
+const SHARE_PREFIX_V1 = 'j1.';    // legacy full JSON
 const B36 = '0123456789abcdefghijklmnopqrstuvwxyz';
-const SHARE_LIMIT = 60000; // 超過就唔出連結
+const SHARE_LIMIT = 60000; // refuse to produce links longer than this
 
-// 'server' = 有本機 node server（自動存檔）；'local' = 純前端，存 localStorage
+// 'server' = local node server is present and persists state; 'local' = localStorage only
 let MODE = 'local';
 let readonly = false;
 
@@ -19,9 +20,9 @@ let state = null;
 const undoStack = [];
 let saveTimer = null;
 let dragging = null;
-let moving = null; // 觸控搬移模式：{ personId, slots[] }
+let moving = null; // touch move mode: { personId, slots[] }
 let selectedTaskId = null;
-let zoomed = false; // false = 全部時間擠入畫面；true = 放大可左右滾動
+let zoomed = false; // false = fit all hours on screen; true = enlarged with horizontal scroll
 let warnings = [];
 let warnCells = new Map();
 let warnPeople = new Map();
@@ -66,7 +67,7 @@ function slots() {
 function slotsFor(start, end) {
   let a = toMin(start);
   let b = toMin(end);
-  if (b <= a) b += 1440; // 跨夜
+  if (b <= a) b += 1440; // shift crosses midnight
   a = Math.floor(a / 30) * 30;
   b = Math.ceil(b / 30) * 30;
   const out = [];
@@ -107,7 +108,7 @@ function isRest(personId, slot) {
   return !t || Boolean(t.isBreak);
 }
 
-// 這人在這個 slot 是否應該上班（可上班時段 + 已排班）
+// Whether this person can be scheduled at this slot (inside their availability window)
 function isAvailable(person, slot) {
   const m = toMin(slot);
   if (person.from && m < toMin(person.from)) return false;
@@ -141,11 +142,11 @@ function normalize(s) {
   out.people = Array.isArray(out.people)
     ? out.people.filter((p) => p && p.id).map((p) => {
         const person = { id: p.id, name: p.name || '人手', color: p.color || '#5B8DEF' };
-        if (p.from) person.from = p.from;   // 可上班時間（含）
-        if (p.to) person.to = p.to;         // 可上班時間（不含）
+        if (p.from) person.from = p.from;   // availability window start (inclusive)
+        if (p.to) person.to = p.to;         // availability window end (exclusive)
         if (p.dailyMax) person.dailyMax = Number(p.dailyMax) || 0;
-        if (p.noBreak) person.noBreak = true;      // 不受休息類規則約束
-        if (p.noRunLimit) person.noRunLimit = true; // 不受連做上限約束
+        if (p.noBreak) person.noBreak = true;      // exempt from rest rules
+        if (p.noRunLimit) person.noRunLimit = true; // exempt from consecutive-work limit
         return person;
       })
     : [];
@@ -169,7 +170,7 @@ function readLocal() {
   }
 }
 
-// 純前端第一次開：給一份示範，方便即刻睇到效果
+// Seed a demo roster on first visit so the tool is not empty
 function demoSeed() {
   const A = {};
   const put = (pid, from, to, taskId) => {
@@ -210,7 +211,7 @@ function demoSeed() {
   });
 }
 
-// 有 /api/state 就當係本機 server 模式；GitHub Pages 上會 fetch 到 404 HTML → local 模式
+// Present /api/state means a local server; GitHub Pages returns 404 HTML, so fall back to local mode
 async function detectMode() {
   if (location.protocol === 'file:') return 'local';
   try {
@@ -328,6 +329,43 @@ function b64encodeUtf8(str) {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+function bytesToB64url(bytes) {
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlToBytes(s) {
+  const norm = s.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = norm.length % 4 === 0 ? '' : '='.repeat(4 - (norm.length % 4));
+  const bin = atob(norm + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// deflate-raw round trip; falls back to plain JSON when CompressionStream is unavailable
+async function deflateBytes(bytes) {
+  if (typeof CompressionStream !== 'function') return null;
+  try {
+    const cs = new CompressionStream('deflate-raw');
+    const stream = new Blob([bytes]).stream().pipeThrough(cs);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+async function inflateBytes(bytes) {
+  if (typeof DecompressionStream !== 'function') throw new Error('no DecompressionStream');
+  const ds = new DecompressionStream('deflate-raw');
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 function b64decodeUtf8(s) {
   const norm = s.replace(/-/g, '+').replace(/_/g, '/');
   const pad = norm.length % 4 === 0 ? '' : '='.repeat(4 - (norm.length % 4));
@@ -337,15 +375,12 @@ function b64decodeUtf8(s) {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
-function encodeShare(s) {
-  // 工作太多（>36）就退回舊格式，避免 base36 單字元表示不夠用
-  if (s.tasks.length > 36 || s.people.length > 99) {
-    return SHARE_PREFIX_V1 + b64encodeUtf8(JSON.stringify(s));
-  }
+// Build the compact (j2) payload object. Short keys keep the JSON small.
+function buildCompact(s) {
   const sl = slotsFor(s.start, s.end);
   const taskIdx = new Map(s.tasks.map((t, i) => [t.id, i]));
 
-  // 每人一行字串：'-' = 空，其餘 = base36 的工作索引
+  // One string per person: '-' = empty, otherwise a base36 task index.
   const rows = s.people.map((p) =>
     sl.map((slot) => {
       const tid = s.assignments[key(p.id, slot)];
@@ -354,12 +389,12 @@ function encodeShare(s) {
     }).join(''),
   );
 
-  const compact = {
+  return {
     t: s.title,
     d: s.date,
     s: s.start,
     e: s.end,
-    // [名, 顏色(預設色留 null), 由, 到, flags]
+    // [name, color (null when it is the palette default), from, to, flags]
     p: s.people.map((p, i) => [
       p.name,
       p.color === PERSON_PALETTE[i % PERSON_PALETTE.length] ? null : p.color,
@@ -379,13 +414,30 @@ function encodeShare(s) {
     }),
     a: rows,
   };
-  return SHARE_PREFIX + b64encodeUtf8(JSON.stringify(compact));
 }
 
-// j2：緊湊格式
-function decodeShareV2(payload) {
-  const obj = JSON.parse(b64decodeUtf8(payload));
-  if (!obj || typeof obj !== 'object') throw new Error('格式錯誤');
+// Encode a share link. j3 = deflate-raw over the compact JSON, j2 = plain compact JSON.
+async function encodeShare(s) {
+  // Fall back to the legacy full-JSON format when base36 indices would overflow.
+  if (s.tasks.length > 36 || s.people.length > 99) {
+    return SHARE_PREFIX_V1 + b64encodeUtf8(JSON.stringify(s));
+  }
+  const json = JSON.stringify(buildCompact(s));
+  const packed = await deflateBytes(new TextEncoder().encode(json));
+  if (!packed) return SHARE_PREFIX_PLAIN + b64encodeUtf8(json);
+  return SHARE_PREFIX + bytesToB64url(packed);
+}
+
+// Decode the compact (j2/j3) payload. Compressed input is inflated first.
+async function decodeShare(payload, compressed) {
+  let jsonBytes;
+  if (compressed) {
+    jsonBytes = await inflateBytes(b64urlToBytes(payload));
+  } else {
+    jsonBytes = new TextEncoder().encode(b64decodeUtf8(payload));
+  }
+  const obj = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(jsonBytes));
+  if (!obj || typeof obj !== 'object') throw new Error('invalid payload');
 
   const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
   const hex = (v, fallback) => (/^#[0-9a-fA-F]{3,8}$/.test(String(v)) ? String(v) : fallback);
@@ -471,7 +523,7 @@ function decodeShareV2(payload) {
   });
 }
 
-// 解出嚟嘅係不可信輸入：逐欄驗證，任何唔識嘅一律丟棄
+// Legacy j1 decoder. Decoded input is untrusted: validate every field and drop anything unknown.
 function decodeShareV1(payload) {
   const raw = b64decodeUtf8(payload);
   const obj = JSON.parse(raw);
@@ -547,9 +599,9 @@ function decodeShareV1(payload) {
   });
 }
 
-function shareUrl() {
+async function shareUrl() {
   const base = location.origin + location.pathname;
-  return `${base}#d=${encodeShare(state)}`;
+  return `${base}#d=${await encodeShare(state)}`;
 }
 
 /* ---------------- readonly banner ---------------- */
@@ -588,7 +640,7 @@ function showShareBanner(fromLink) {
   }
 }
 
-// 由分享連結進入改動模式：清 URL、寫入本機、解除唯讀
+// Leave read-only share view: clear the URL hash, persist locally, and allow editing
 function adoptShare() {
   const copy = normalize(JSON.parse(JSON.stringify(state)));
   history.replaceState(null, '', location.pathname + location.search);
@@ -596,10 +648,10 @@ function adoptShare() {
   document.body.classList.remove('readonly');
   state = copy;
   undoStack.length = 0;
-  applyReadonlyUi(); // 解除所有 disabled
+  applyReadonlyUi(); // re-enable every control
   syncInputs();
   renderAll();
-  save(true); // local 模式寫 localStorage；server 模式寫回 state.json
+  save(true); // local mode writes localStorage, server mode writes state.json
   setSaveStatus('已複製，可以修改');
   showShareBanner(false);
 }
@@ -740,7 +792,7 @@ function evaluateRules() {
           message: `${person.name} 在 ${rule.from}–${rule.to} 只有 ${(rest.length * SLOT_MIN) / 60} 小時休息，要 ${rule.hours} 小時`,
         });
         pushTo(warnPeople, person.id, `${rule.from}–${rule.to} 休息不足`);
-        // 視窗內正在工作的格子就是問題所在
+        // Cells worked inside the window are where the violation sits
         for (const s of range) {
           if (isWorking(person.id, s)) {
             pushTo(warnCells, key(person.id, s), `${rule.from}–${rule.to} 內要休息 ${rule.hours} 小時`);
@@ -751,7 +803,7 @@ function evaluateRules() {
   }
 }
 
-/* ---------------- 列表拖曳排序 ---------------- */
+/* ---------------- list reordering by drag ---------------- */
 let listDrag = null; // { kind, id, startY }
 
 function makeSortable(listEl, kind, onReorder) {
@@ -759,7 +811,7 @@ function makeSortable(listEl, kind, onReorder) {
     if (readonly) return;
     const row = e.target.closest('[data-id]');
     if (!row) return;
-    // 只在按住手柄時才算「排序」，否則交由工作卡本身處理（可拖到時間表）
+    // Only treat this as reordering when the grip is held; otherwise the task row drags to the grid
     if (!e.target.closest('.grip')) return;
     listDrag = { kind, id: row.dataset.id };
     row.classList.add('sorting');
@@ -871,7 +923,7 @@ function renderLists() {
       });
     });
 
-    // 可上班時間 + 例外
+    // Availability window and rule exemptions
     const meta = document.createElement('div');
     meta.className = 'person-meta';
 
@@ -1067,7 +1119,7 @@ function renderRules() {
   }
   $('ruleCount').textContent = `(${state.rules.length})`;
 
-  // 工作下拉選單
+  // Task picker for the rule form
   const sel = $('ruleTask');
   const prev = sel.value;
   sel.textContent = '';
@@ -1079,7 +1131,7 @@ function renderRules() {
   }
   if (state.tasks.some((t) => t.id === prev)) sel.value = prev;
 
-  // 排序手柄：列表重繪後重新綁定
+  // Rebind sort handles after each list render
   bindSortOnce();
 }
 
@@ -1107,14 +1159,14 @@ function renderGrid() {
   grid.style.setProperty('--half-cols', sl.length);
   grid.classList.toggle('zoomed', zoomed);
 
-  // 左上角（唔顯示文字）
+  // Top-left corner cell (intentionally blank)
   const corner = document.createElement('div');
   corner.className = 'cell h-name h-corner';
   corner.style.gridColumn = '1';
   corner.style.gridRow = '1';
   grid.append(corner);
 
-  // 小時標題
+  // Hour headers
   let col = 2;
   for (const h of hours()) {
     const el = document.createElement('div');
@@ -1205,7 +1257,7 @@ function renderGrid() {
     });
     grid.append(nameCell);
 
-    // 連續同工作 → 合併成一塊
+    // Merge consecutive slots of the same task into one block
     let i = 0;
     while (i < sl.length) {
       const slot = sl[i];
@@ -1226,7 +1278,7 @@ function renderGrid() {
   requestAnimationFrame(fitBlockLabels);
 }
 
-// 全顯示模式：逐個區塊量度，縮字體直到名稱完整顯示
+// Fit mode: measure each block and shrink the label until the full name fits
 function fitBlockLabels() {
   if (zoomed) return;
   const labels = document.querySelectorAll('.grid:not(.zoomed) .block .block-label');
@@ -1238,7 +1290,7 @@ function fitBlockLabels() {
     if (maxW <= 0 || maxH <= 0) continue;
     let size = 12;
     label.style.fontSize = `${size}px`;
-    // 逐步縮到 6px
+    // Step down to 6px at the smallest
     while (size > 6) {
       const fitsW = label.scrollWidth <= maxW + 1;
       const fitsH = label.scrollHeight <= maxH + 1;
@@ -1246,7 +1298,7 @@ function fitBlockLabels() {
       size -= 0.5;
       label.style.fontSize = `${size}px`;
     }
-    // 名稱仍然過長 → 用兩行
+    // Still too wide: allow the name to wrap
     if (label.scrollWidth > maxW + 1) label.style.wordBreak = 'break-all';
   }
 }
@@ -1296,14 +1348,14 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
   el.style.gridRow = String(rowIndex);
   el.style.background = task.isBreak ? '#eef2f8' : bgFor(task.color, 0.92);
   el.style.color = task.isBreak ? '#41506a' : textFor(task.color);
-  // 時間表上的格不再可拖；搬移改用選取後「搬移」
+  // Grid cells are not draggable; move them with select-then-move instead
   el.draggable = false;
   el.dataset.person = person.id;
   el.dataset.slot = blockSlots[0];
   el.dataset.span = String(blockSlots.length);
   el.dataset.slots = blockSlots.join(',');
 
-  // 內部半小時分隔（虛線）
+  // Half-hour separators inside a merged block
   for (let k = 1; k < blockSlots.length; k += 1) {
     const sep = document.createElement('i');
     sep.className = 'block-sep';
@@ -1352,7 +1404,7 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
   return el;
 }
 
-// 依指標 x 座標算出落在合併區塊的第幾格
+// Map a pointer x coordinate to the slot index inside a merged block
 function slotAtPoint(el, clientX, blockSlots) {
   if (blockSlots.length <= 1) return blockSlots[0];
   const r = el.getBoundingClientRect();
@@ -1376,7 +1428,7 @@ function attachDrop(el, personId, startSlot) {
     const payload = readDropPayload(e);
     dragging = null;
     if (!payload || !payload.taskId) return;
-    // 落點：依指標位置決定實際格（合併區塊只影響 SPAN 那一格）
+    // Resolve the drop slot from the pointer position; a merged block only accepts the hovered slot
     const span = Number(el.dataset.span || 1);
     const blockSlots = span > 1 ? el.dataset.slots.split(',') : [startSlot];
     const slot = slotAtPoint(el, e.clientX, blockSlots);
@@ -1384,7 +1436,7 @@ function attachDrop(el, personId, startSlot) {
   });
 }
 
-/* ---------------- 格互動：點擊 / 長按 / 橫向拖選 ---------------- */
+/* ---------------- grid interaction: click, long-press, horizontal range select ---------------- */
 const gridSel = {
   active: false,
   personId: null,
@@ -1422,7 +1474,7 @@ function paintGridSel() {
       if (selSet.has(elSlots[0])) el.classList.add('sel-range');
       continue;
     }
-    // 合併區塊：逐格標記選中的部分
+    // Merged block: highlight only the selected sub-slots
     const isBlock = el.classList.contains('block');
     elSlots.forEach((s, idx) => {
       if (!selSet.has(s)) return;
@@ -1433,7 +1485,7 @@ function paintGridSel() {
       ov.style.width = `${(1 / elSlots.length) * 100}%`;
       el.append(ov);
     });
-    // 若整塊都被選 → 加整體外框
+    // Select the whole block when every slot is included
     if (elSlots.every((s) => selSet.has(s))) el.classList.add('sel-range');
   }
 }
@@ -1459,7 +1511,7 @@ function cellFromPoint(x, y) {
 }
 
 function bindGridInteraction() {
-  // 用格層的統一委派，處理 click / 拖選
+  // One delegated handler on the grid covers click and range select
   const grid = $('grid');
 
   grid.addEventListener('pointerdown', (e) => {
@@ -1468,7 +1520,7 @@ function bindGridInteraction() {
     const cell = cellFromPoint(e.clientX, e.clientY);
     if (!cell) return;
     if (e.pointerType === 'mouse' && e.shiftKey) {
-      // Shift = 擴充選取
+      // Shift extends the current selection
       if (gridSel.active) {
         extendGridSel(cell.dataset.person, cell.dataset.slot);
         e.preventDefault();
@@ -1480,7 +1532,7 @@ function bindGridInteraction() {
     gridSel.startY = e.clientY;
     gridSel.moved = false;
     gridSel.dragging = false;
-    // 暫時只記下起點，真正開始選取要在 pointermove 超過門檻
+    // Record the start only; the selection begins once pointermove passes the threshold
     gridSel.pendingCell = cell;
   });
 
@@ -1490,7 +1542,7 @@ function bindGridInteraction() {
     const dy = Math.abs(e.clientY - gridSel.startY);
     if (!gridSel.dragging && Math.max(dx, dy) < 6) return;
     if (!gridSel.dragging) {
-      // 開始拖選：只限橫向（同一個人）
+      // Start range selecting: horizontal only, same person
       gridSel.dragging = true;
       gridSel.active = true;
       gridSel.personId = gridSel.pendingCell.dataset.person;
@@ -1522,7 +1574,7 @@ function bindGridInteraction() {
     document.body.classList.remove('selecting');
 
     if (wasDragging) {
-      // 拖選完成：保持選取，開選單
+      // Range select finished: keep the highlight and open the picker
       if (selSlots.length) {
         paintGridSel();
         openPicker(pending, { personId: selPerson, slots: selSlots });
@@ -1530,7 +1582,7 @@ function bindGridInteraction() {
       }
       return;
     }
-    // 單純點擊
+    // Plain click
     const cell = cellFromPoint(e.clientX, e.clientY) || pending;
     const slot = slotAtPoint(cell, e.clientX,
       cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
@@ -1544,12 +1596,12 @@ function bindGridInteraction() {
     document.body.classList.remove('selecting');
   });
 
-  // 點空白處取消選取
+  // Clicking outside clears the selection
   document.addEventListener('pointerdown', (e) => {
     if (gridSel.active && !e.target.closest('#grid') && !e.target.closest('#picker')) clearGridSel();
   });
 
-  // 長按：觸控長按 = 一次選取連續幾格（橫向）
+  // Long-press on touch starts a horizontal range selection
   attachLongPressDelegate(grid);
 }
 
@@ -1577,7 +1629,7 @@ function handleCellClick(cell, personId, slot, e) {
   });
 }
 
-// 長按（觸控）：開始選取，之後手指橫向拖動擴充
+// Long-press (touch): begin selection, then drag horizontally to extend it
 function attachLongPressDelegate(grid) {
   let timer = null;
   let person = null;
@@ -1637,7 +1689,7 @@ function applyDrop(payload, personId, startSlot) {
   if (!targets.length) return;
   if (payload.type === 'move' && payload.personId === personId && payload.slots[0] === startSlot) return;
 
-  // 放開時清掉選取
+  // Clear the selection after a drop
   clearGridSel();
   commit(() => {
     if (payload.type === 'move' && payload.slots) {
@@ -1647,7 +1699,7 @@ function applyDrop(payload, personId, startSlot) {
   });
 }
 
-/* ---------------- 觸控搬移 ---------------- */
+/* ---------------- touch move mode ---------------- */
 function placeMoving(personId, startSlot) {
   const sl = slots();
   const idx = sl.indexOf(startSlot);
@@ -1783,7 +1835,7 @@ function openPicker(anchor, ctx) {
     sep.className = 'pk-sep';
     picker.append(sep);
 
-    // 手機沒有拖放，用「搬移」模式取代
+    // Touch devices have no HTML5 drag, so offer a move mode instead
     const move = document.createElement('button');
     move.type = 'button';
     move.className = 'pk-item';
@@ -1863,7 +1915,7 @@ function setDragPayload(e, payload) {
   try {
     e.dataTransfer.setData('text/plain', JSON.stringify(payload));
   } catch {
-    /* 某些環境不支援 dataTransfer，退回 dragging 變數 */
+    /* Some environments block dataTransfer, so fall back to the dragging variable */
   }
   if (e.dataTransfer) e.dataTransfer.effectAllowed = payload.type === 'move' ? 'move' : 'copy';
 }
@@ -2042,7 +2094,7 @@ function autofill() {
       let have = countTask(slot, rule.taskId) + plannedCount(slot, rule.taskId);
       if (have >= rule.min) continue;
 
-      // 上一格（或下一格）已在做同一個工作的人，優先續做，避免碎片
+      // Prefer people already doing this task next door, to avoid fragmented blocks
       const prev = sl[sl.indexOf(slot) - 1];
       const next = sl[sl.indexOf(slot) + 1];
       const continuity = (pid) =>
@@ -2096,7 +2148,7 @@ function exportCsv() {
 
 /* ---------------- share ---------------- */
 async function copyShareLink() {
-  const url = shareUrl();
+  const url = await shareUrl();
   if (url.length > SHARE_LIMIT) {
     setSaveStatus(`連結太長（${url.length} 字元），請減少人手或工作`);
     return;
@@ -2106,7 +2158,7 @@ async function copyShareLink() {
     await navigator.clipboard.writeText(url);
     copied = true;
   } catch {
-    // 沒有 clipboard 權限（例如 http 非 localhost）→ 退回 textarea
+    // No clipboard permission (plain http outside localhost): fall back to a textarea
     const ta = document.createElement('textarea');
     ta.value = url;
     ta.style.position = 'fixed';
@@ -2163,18 +2215,15 @@ async function copyShareLink() {
   box.append(text, open, hide);
 }
 
-function readShareFromHash() {
+async function readShareFromHash() {
   const hash = location.hash || '';
   const m = hash.match(/^#d=(.+)$/);
   if (!m) return null;
   const payload = m[1];
   try {
-    if (payload.startsWith(SHARE_PREFIX)) {
-      return decodeShareV2(payload.slice(SHARE_PREFIX.length));
-    }
-    if (payload.startsWith(SHARE_PREFIX_V1)) {
-      return decodeShareV1(payload.slice(SHARE_PREFIX_V1.length));
-    }
+    if (payload.startsWith(SHARE_PREFIX)) return await decodeShare(payload.slice(SHARE_PREFIX.length), true);
+    if (payload.startsWith(SHARE_PREFIX_PLAIN)) return await decodeShare(payload.slice(SHARE_PREFIX_PLAIN.length), false);
+    if (payload.startsWith(SHARE_PREFIX_V1)) return decodeShareV1(payload.slice(SHARE_PREFIX_V1.length));
     return null;
   } catch (err) {
     console.warn('分享連結解析失敗', err);
@@ -2203,7 +2252,7 @@ function showShareError() {
   box.append(text, hide);
 }
 
-/* ---------------- 縮放切換 ---------------- */
+/* ---------------- zoom toggle ---------------- */
 function toggleZoom() {
   zoomed = !zoomed;
   const btn = $('fitBtn');
@@ -2213,7 +2262,7 @@ function toggleZoom() {
   requestAnimationFrame(refreshScrollShadows);
 }
 
-/* ---------------- 滾動陰影 ---------------- */
+/* ---------------- scroll shadows ---------------- */
 function updateScrollShadow(el) {
   if (!el) return;
   const canX = el.scrollWidth > el.clientWidth + 1;
@@ -2341,7 +2390,7 @@ function bind() {
 /* ---------------- boot ---------------- */
 (async function boot() {
   await load();
-  const shared = readShareFromHash();
+  const shared = await readShareFromHash();
   syncInputs();
   bind();
   bindMobile();

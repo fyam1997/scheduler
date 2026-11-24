@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 排班表 — 零依賴的本機 server：靜態檔案 + JSON 狀態讀寫
+// Scheduler — zero-dependency local server: static files plus JSON state read/write
 const http = require('node:http');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -23,7 +23,7 @@ const MIME = {
 };
 
 function defaultState() {
-  // 示範排班：符合預設三條條件（4 小時上限、11–14 休息 1 小時、11–14 收銀有人）
+  // Demo roster that satisfies the three default rules (4-hour limit, 1-hour break in 11–14, cashier covered in 11–14)
   const toMin = (hhmm) => {
     const [h, m] = String(hhmm).split(':').map(Number);
     return h * 60 + (m || 0);
@@ -80,7 +80,7 @@ async function readState() {
   try {
     return JSON.parse(raw);
   } catch (err) {
-    // 檔案壞掉：留一份 .broken 備份，重新開始，避免整個工具卡死
+    // Corrupt file: keep a .broken copy and start over instead of wedging the whole tool
     const backup = `${STATE_FILE}.broken-${Date.now()}`;
     await fsp.rename(STATE_FILE, backup).catch(() => {});
     console.warn(`資料檔無法解析，已備份到 ${backup}，改用預設內容。`);
@@ -116,7 +116,7 @@ async function readBody(req) {
 }
 
 async function serveStatic(req, res, urlPath) {
-  // 本機測試頁（唔會上 GitHub Pages）
+  // Local-only test page (never deployed to GitHub Pages)
   if (urlPath === '/test-drag.html') {
     try {
       const buf = await fsp.readFile(path.join(ROOT, '.tmp', 'test-drag.html'));

@@ -699,8 +699,10 @@ body.selecting .sl { cursor: crosshair; }
     display: flex;
     align-items: center;
     gap: 8px;
-    padding-bottom: 10px;
-    margin-bottom: 2px;
+    /* The panel loses its top padding so sticky top:0 lands on the panel edge;
+       the header supplies the top inset itself and bleeds to the panel sides. */
+    margin: 0 -14px 2px;
+    padding: 12px 14px 10px;
     border-bottom: 1px solid var(--line);
     position: sticky;
     top: 0;
@@ -784,7 +786,7 @@ body.selecting .sl { cursor: crosshair; }
     width: auto;
     flex: none;
     max-height: 74vh;
-    padding: 12px 14px calc(14px + env(safe-area-inset-bottom));
+    padding: 0 14px calc(14px + env(safe-area-inset-bottom));
     border-right: 0;
     border-top: 1px solid var(--line);
     border-radius: 16px 16px 0 0;

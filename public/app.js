@@ -99,6 +99,19 @@ function isRest(personId, slot) {
   const t = assignedTask(personId, slot);
   return !t || Boolean(t.isBreak);
 }
+
+// 這人在這個 slot 是否應該上班（可上班時段 + 已排班）
+function isAvailable(person, slot) {
+  const m = toMin(slot);
+  if (person.from && m < toMin(person.from)) return false;
+  if (person.to && m >= toMin(person.to)) return false;
+  return true;
+}
+
+function personName(id) {
+  const p = personById(id);
+  return p ? p.name : id;
+}
 function countTask(slot, taskId) {
   let n = 0;
   for (const p of state.people) if (state.assignments[key(p.id, slot)] === taskId) n += 1;
@@ -118,7 +131,17 @@ function normalize(s) {
     assignments: {},
     ...(s || {}),
   };
-  out.people = Array.isArray(out.people) ? out.people.filter((p) => p && p.id) : [];
+  out.people = Array.isArray(out.people)
+    ? out.people.filter((p) => p && p.id).map((p) => {
+        const person = { id: p.id, name: p.name || '人手', color: p.color || '#5B8DEF' };
+        if (p.from) person.from = p.from;   // 可上班時間（含）
+        if (p.to) person.to = p.to;         // 可上班時間（不含）
+        if (p.dailyMax) person.dailyMax = Number(p.dailyMax) || 0;
+        if (p.noBreak) person.noBreak = true;      // 不受休息類規則約束
+        if (p.noRunLimit) person.noRunLimit = true; // 不受連做上限約束
+        return person;
+      })
+    : [];
   out.tasks = Array.isArray(out.tasks)
     ? out.tasks.filter((t) => t && t.id).map((t) => ({ id: t.id, name: t.name, color: t.color || '#5B8DEF', isBreak: Boolean(t.isBreak) }))
     : [];
@@ -324,7 +347,16 @@ function decodeShare(payload) {
   const people = (Array.isArray(obj.people) ? obj.people : [])
     .slice(0, 200)
     .filter((p) => p && typeof p === 'object' && p.id != null)
-    .map((p) => ({ id: str(String(p.id), 40), name: str(p.name, 60) || '人手', color: hex(p.color) }))
+    .map((p) => {
+      const person = { id: str(String(p.id), 40), name: str(p.name, 60) || '人手', color: hex(p.color) };
+      const f = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.from)) ? String(p.from) : '';
+      const t = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.to)) ? String(p.to) : '';
+      if (f) person.from = f;
+      if (t) person.to = t;
+      if (p.noRunLimit === true) person.noRunLimit = true;
+      if (p.noBreak === true) person.noBreak = true;
+      return person;
+    })
     .filter((p) => p.id);
 
   const tasks = (Array.isArray(obj.tasks) ? obj.tasks : [])
@@ -531,7 +563,7 @@ function evaluateRules() {
       const mine = sl.filter((s) => state.assignments[key(person.id, s)]);
       if (!mine.length) continue; // 這人今天沒排班，不檢查
 
-      if (rule.type === 'maxRun') {
+      if (rule.type === 'maxRun' && !person.noRunLimit) {
         const limit = Math.max(1, Number(rule.hours) || 4) * (60 / SLOT_MIN);
         let run = [];
         const flush = () => {
@@ -559,7 +591,7 @@ function evaluateRules() {
         flush();
       }
 
-      if (rule.type === 'rest') {
+      if (rule.type === 'rest' && !person.noBreak) {
         const range = rangeSlots(rule.from, rule.to);
         const needSlots = Math.max(1, Number(rule.hours) || 1) * (60 / SLOT_MIN);
         const rest = range.filter((s) => isRest(person.id, s));
@@ -629,7 +661,52 @@ function renderLists() {
       });
     });
 
+    // 可上班時間 + 例外
+    const meta = document.createElement('div');
+    meta.className = 'person-meta';
+
+    const fromIn = document.createElement('input');
+    fromIn.type = 'time';
+    fromIn.className = 'mini-time';
+    fromIn.value = p.from || '';
+    fromIn.title = '可上班時間（由）';
+    fromIn.addEventListener('change', () => {
+      commit(() => {
+        const v = fromIn.value;
+        if (v) p.from = v;
+        else delete p.from;
+      });
+    });
+
+    const toIn = document.createElement('input');
+    toIn.type = 'time';
+    toIn.className = 'mini-time';
+    toIn.value = p.to || '';
+    toIn.title = '可上班時間（到）';
+    toIn.addEventListener('change', () => {
+      commit(() => {
+        const v = toIn.value;
+        if (v) p.to = v;
+        else delete p.to;
+      });
+    });
+
+    const ex = document.createElement('button');
+    ex.type = 'button';
+    ex.className = `chip-toggle${p.noRunLimit || p.noBreak ? ' on' : ''}`;
+    ex.textContent = '免限';
+    ex.title = '免連做上限／免休息（例如固定崗位的人）';
+    ex.addEventListener('click', () => {
+      commit(() => {
+        const on = !(p.noRunLimit || p.noBreak);
+        if (on) { p.noRunLimit = true; p.noBreak = true; }
+        else { delete p.noRunLimit; delete p.noBreak; }
+      });
+    });
+
     li.append(sw, name, del);
+    meta.append(fromIn, toIn, ex);
+    li.append(meta);
     peopleList.append(li);
   });
   $('peopleCount').textContent = `(${state.people.length})`;
@@ -882,7 +959,7 @@ function renderGrid() {
       if (!selectedTaskId) return;
       const id = selectedTaskId;
       commit(() => {
-        for (const s of sl) state.assignments[key(person.id, s)] = id;
+        for (const s of sl) if (isAvailable(person, s)) state.assignments[key(person.id, s)] = id;
       });
     });
     grid.append(nameCell);
@@ -909,11 +986,17 @@ function renderGrid() {
 function buildEmptyCell(person, slot, colStart, rowIndex) {
   const el = document.createElement('div');
   const isHourEnd = toMin(slot) % 60 === 30;
-  el.className = `cell sl empty${isHourEnd ? ' hour-end' : ' mid'}`;
+  const available = isAvailable(person, slot);
+  el.className = `cell sl empty${isHourEnd ? ' hour-end' : ' mid'}${available ? '' : ' offshift'}`;
   el.style.gridColumn = String(colStart);
   el.style.gridRow = String(rowIndex);
   el.dataset.person = person.id;
   el.dataset.slot = slot;
+
+  if (!available) {
+    el.title = `${person.name} 不在可上班時間（${person.from || '—'}–${person.to || '—'}）`;
+    return el;
+  }
 
   const msgs = warnSlots.get(slot);
   if (msgs) {
@@ -1463,7 +1546,7 @@ function autofill() {
 
       while (have < rule.min) {
         const cand = state.people
-          .filter((p) => !state.assignments[key(p.id, slot)] && !planned.has(key(p.id, slot)))
+          .filter((p) => isAvailable(p, slot) && !state.assignments[key(p.id, slot)] && !planned.has(key(p.id, slot)))
           .sort((a, b) => continuity(b.id) - continuity(a.id) || load.get(a.id) - load.get(b.id));
         if (!cand.length) break;
         const pick = cand[0];

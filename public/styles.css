@@ -183,7 +183,27 @@ body.readonly .person-name.has-warn { cursor: default; }
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+  flex-wrap: wrap;
 }
+.person-row .person-meta {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  padding-left: 20px;
+}
+.person-meta .mini-time {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 4px;
+  font-size: 11px;
+  width: 74px;
+  background: #f8fafd;
+  color: var(--ink-soft);
+}
+.person-meta .mini-time:focus { outline: 2px solid rgba(47, 109, 246, 0.3); border-color: var(--primary); background: #fff; }
+.person-meta .mini-time:invalid { color: var(--ink-soft); }
 .swatch { width: 12px; height: 12px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; flex: 0 0 12px; }
 .person-row input.name-edit { flex: 1; min-width: 0; border: 0; background: transparent; font-size: 13px; }
 .person-row input.name-edit:focus { outline: none; border-bottom: 1px solid var(--primary); }
@@ -486,6 +506,18 @@ body.moving .sl:hover { box-shadow: inset 0 0 0 2px var(--primary); background: 
 }
 
 .sl.has-warn { box-shadow: inset 0 0 0 2px var(--warn-line); background: #fffaf2 !important; }
+/* 不在可上班時間：斜線遮住，不能排 */
+.sl.offshift {
+  background: repeating-linear-gradient(
+    135deg,
+    #f4f6fa,
+    #f4f6fa 5px,
+    #e9edf4 5px,
+    #e9edf4 10px
+  ) !important;
+  cursor: not-allowed;
+}
+.sl.offshift:hover { background: repeating-linear-gradient(135deg, #f4f6fa, #f4f6fa 5px, #e9edf4 5px, #e9edf4 10px) !important; }
 .sl .warn-badge {
   position: absolute;
   right: 4px;

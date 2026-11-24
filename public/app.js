@@ -19,6 +19,7 @@ let saveTimer = null;
 let dragging = null;
 let moving = null; // 觸控搬移模式：{ personId, slots[] }
 let selectedTaskId = null;
+let zoomed = false; // false = 全部時間擠入畫面；true = 放大可左右滾動
 let warnings = [];
 let warnCells = new Map();
 let warnPeople = new Map();
@@ -488,8 +489,7 @@ function applyReadonlyUi() {
   for (const id of ['undoBtn', 'autofillBtn', 'clearBtn']) {
     const el = $(id);
     if (el) el.disabled = readonly;
-  }
-  for (const id of ['titleInput', 'dateInput', 'startInput', 'endInput']) {
+  }  for (const id of ['titleInput', 'dateInput', 'startInput', 'endInput']) {
     const el = $(id);
     if (el) el.disabled = readonly;
   }
@@ -864,11 +864,11 @@ function renderGrid() {
   grid.textContent = '';
   const sl = slots();
   grid.style.setProperty('--half-cols', sl.length);
+  grid.classList.toggle('zoomed', zoomed);
 
-  // 左上角
+  // 左上角（唔顯示文字）
   const corner = document.createElement('div');
   corner.className = 'cell h-name h-corner';
-  corner.textContent = '人手 ＼ 時間';
   corner.style.gridColumn = '1';
   corner.style.gridRow = '1';
   grid.append(corner);
@@ -981,6 +981,33 @@ function renderGrid() {
       i = j + 1;
     }
   });
+
+  requestAnimationFrame(fitBlockLabels);
+}
+
+// 全顯示模式：逐個區塊量度，縮字體直到名稱完整顯示
+function fitBlockLabels() {
+  if (zoomed) return;
+  const labels = document.querySelectorAll('.grid:not(.zoomed) .block .block-label');
+  for (const label of labels) {
+    const block = label.parentElement;
+    if (!block) continue;
+    const maxW = block.clientWidth - 12; // padding
+    const maxH = block.clientHeight - 10;
+    if (maxW <= 0 || maxH <= 0) continue;
+    let size = 12;
+    label.style.fontSize = `${size}px`;
+    // 逐步縮到 6px
+    while (size > 6) {
+      const fitsW = label.scrollWidth <= maxW + 1;
+      const fitsH = label.scrollHeight <= maxH + 1;
+      if (fitsW && fitsH) break;
+      size -= 0.5;
+      label.style.fontSize = `${size}px`;
+    }
+    // 名稱仍然過長 → 用兩行
+    if (label.scrollWidth > maxW + 1) label.style.wordBreak = 'break-all';
+  }
 }
 
 function buildEmptyCell(person, slot, colStart, rowIndex) {
@@ -1049,6 +1076,7 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
   const label = document.createElement('span');
   label.className = 'block-label';
   label.textContent = task.name;
+  label.title = task.name;
   el.append(label);
 
   const hrs = (blockSlots.length * SLOT_MIN) / 60;
@@ -1693,6 +1721,18 @@ function showShareError() {
   box.append(text, hide);
 }
 
+/* ---------------- 縮放切換 ---------------- */
+function toggleZoom() {
+  zoomed = !zoomed;
+  const btn = $('fitBtn');
+  btn.textContent = zoomed ? '全顯示' : '放大';
+  btn.title = zoomed
+    ? '切換：全部時間擠在畫面內 / 放大可左右滾動'
+    : '切換：全部時間擠在畫面內 / 放大可左右滾動';
+  btn.classList.toggle('on', zoomed);
+  renderGrid();
+}
+
 /* ---------------- inputs / bind ---------------- */
 function syncInputs() {
   $('titleInput').value = state.title;
@@ -1763,6 +1803,7 @@ function bind() {
 
   $('undoBtn').addEventListener('click', undo);
   $('autofillBtn').addEventListener('click', autofill);
+  $('fitBtn').addEventListener('click', toggleZoom);
   $('csvBtn').addEventListener('click', exportCsv);
   $('clearBtn').addEventListener('click', () => {
     if (!Object.keys(state.assignments).length) return;

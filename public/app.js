@@ -21,7 +21,7 @@ const undoStack = [];
 let saveTimer = null;
 let moving = null; // touch move mode: { personId, slots[] }
 let selectedTaskId = null;
-let zoomed = false; // false = fit all hours on screen; true = enlarged with horizontal scroll
+let zoomed = true; // true = enlarged with horizontal scroll (default); false = fit all hours on screen
 let warnings = [];
 let warnCells = new Map();
 let warnPeople = new Map();
@@ -1396,6 +1396,7 @@ function clearGridSel() {
   gridSel.slots = [];
   gridSel.dragging = false;
   gridSel.moved = false;
+  document.body.classList.remove('selecting');
   for (const el of document.querySelectorAll('.sel-range')) el.classList.remove('sel-range');
 }
 
@@ -1451,8 +1452,43 @@ function cellFromPoint(x, y) {
 }
 
 function bindGridInteraction() {
-  // One delegated handler on the grid covers click and range select
+  // One delegated handler on the grid covers click, long-press and range select
   const grid = $('grid');
+  const LONG_PRESS_MS = 380;  // touch/pen: hold this long before selecting
+  const TOUCH_MOVE_TOL = 9;   // drift still treated as a press, not a pan
+  const MOUSE_MOVE_TOL = 6;   // mouse starts selecting once past this
+
+  let longPressTimer = null;
+
+  const clearLongPress = () => {
+    if (longPressTimer) clearTimeout(longPressTimer);
+    longPressTimer = null;
+  };
+
+  // Native panning must stop once a long press has become a selection. This
+  // listener is non-passive from the start because Chromium decides at
+  // touchstart whether a gesture may be cancelled; it only preventDefaults
+  // while a selection is running, so ordinary panning stays untouched.
+  grid.addEventListener('touchmove', (e) => {
+    if (gridSel.dragging) e.preventDefault();
+  }, { passive: false });
+
+  const beginSelection = (cell, clientX) => {
+    const blockSlots = cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot];
+    gridSel.active = true;
+    gridSel.personId = cell.dataset.person;
+    gridSel.anchor = slotAtPoint(cell, clientX, blockSlots);
+    gridSel.slots = [gridSel.anchor];
+    paintGridSel();
+    document.body.classList.add('selecting');
+  };
+
+  const resetGesture = () => {
+    clearLongPress();
+    gridSel.pendingCell = null;
+    gridSel.pointerId = null;
+    gridSel.dragging = false;
+  };
 
   grid.addEventListener('pointerdown', (e) => {
     if (readonly || e.button !== 0) return;
@@ -1467,31 +1503,43 @@ function bindGridInteraction() {
       }
       return;
     }
+    resetGesture();
     gridSel.pointerId = e.pointerId;
     gridSel.startX = e.clientX;
     gridSel.startY = e.clientY;
     gridSel.moved = false;
-    gridSel.dragging = false;
-    // Record the start only; the selection begins once pointermove passes the threshold
+    // Record the start only; mouse selects on movement, touch/pen needs a long press
     gridSel.pendingCell = cell;
+    if (e.pointerType === 'mouse') return;
+
+    const pressedCell = cell;
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (!gridSel.pendingCell || gridSel.pointerId !== e.pointerId) return;
+      gridSel.dragging = true;
+      beginSelection(pressedCell, gridSel.startX);
+      try { grid.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      try { navigator.vibrate?.(12); } catch { /* vibration is optional */ }
+    }, LONG_PRESS_MS);
   });
 
   grid.addEventListener('pointermove', (e) => {
     if (!gridSel.pendingCell || e.pointerId !== gridSel.pointerId) return;
     const dx = Math.abs(e.clientX - gridSel.startX);
     const dy = Math.abs(e.clientY - gridSel.startY);
-    if (!gridSel.dragging && Math.max(dx, dy) < 6) return;
+    const dist = Math.max(dx, dy);
+
     if (!gridSel.dragging) {
-      // Start range selecting: horizontal only, same person
-      gridSel.dragging = true;
-      gridSel.active = true;
-      gridSel.personId = gridSel.pendingCell.dataset.person;
-      const firstSlot = slotAtPoint(gridSel.pendingCell, gridSel.startX,
-        gridSel.pendingCell.dataset.slots ? gridSel.pendingCell.dataset.slots.split(',') : [gridSel.pendingCell.dataset.slot]);
-      gridSel.anchor = firstSlot;
-      gridSel.slots = [firstSlot];
-      paintGridSel();
-      document.body.classList.add('selecting');
+      if (e.pointerType === 'mouse') {
+        if (dist < MOUSE_MOVE_TOL) return;
+        gridSel.dragging = true;
+        beginSelection(gridSel.pendingCell, gridSel.startX);
+      } else {
+        // Moving before the long press fires is a pan: drop the press and scroll natively
+        if (dist <= TOUCH_MOVE_TOL) return;
+        resetGesture();
+        return;
+      }
     }
     gridSel.moved = true;
     const cell = cellFromPoint(e.clientX, e.clientY);
@@ -1504,13 +1552,15 @@ function bindGridInteraction() {
   }, { passive: false });
 
   const finish = (e) => {
-    if (!gridSel.pendingCell) return;
+    if (!gridSel.pendingCell) {
+      resetGesture();
+      return;
+    }
     const wasDragging = gridSel.dragging;
     const pending = gridSel.pendingCell;
     const selSlots = gridSel.slots.slice();
     const selPerson = gridSel.personId;
-    gridSel.pendingCell = null;
-    gridSel.pointerId = null;
+    resetGesture();
     document.body.classList.remove('selecting');
 
     if (wasDragging) {
@@ -1518,11 +1568,11 @@ function bindGridInteraction() {
       if (selSlots.length) {
         paintGridSel();
         openPicker(pending, { personId: selPerson, slots: selSlots });
-        paintGridSel(); // picker 開啟後再塗一次，避免時序問題
+        paintGridSel(); // repaint after the picker opens in case it reflows the grid
       }
       return;
     }
-    // Plain click
+    // Plain click or tap
     const cell = cellFromPoint(e.clientX, e.clientY) || pending;
     const slot = slotAtPoint(cell, e.clientX,
       cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
@@ -1531,18 +1581,17 @@ function bindGridInteraction() {
 
   grid.addEventListener('pointerup', finish);
   grid.addEventListener('pointercancel', () => {
-    gridSel.pendingCell = null;
-    gridSel.pointerId = null;
+    const wasSelecting = gridSel.dragging;
+    resetGesture();
     document.body.classList.remove('selecting');
+    // Drop the highlight only when this gesture had started one
+    if (wasSelecting) clearGridSel();
   });
 
   // Clicking outside clears the selection
   document.addEventListener('pointerdown', (e) => {
     if (gridSel.active && !e.target.closest('#grid') && !e.target.closest('#picker')) clearGridSel();
   });
-
-  // Long-press on touch starts a horizontal range selection
-  attachLongPressDelegate(grid);
 }
 
 function handleCellClick(cell, personId, slot, e) {
@@ -1566,57 +1615,6 @@ function handleCellClick(cell, personId, slot, e) {
     personId,
     slots: gridSel.active && gridSel.slots.length ? gridSel.slots.slice() : [slot],
     currentTaskId: taskId,
-  });
-}
-
-// Long-press (touch): begin selection, then drag horizontally to extend it
-function attachLongPressDelegate(grid) {
-  let timer = null;
-  let person = null;
-  let startSlot = null;
-
-  grid.addEventListener('touchstart', (e) => {
-    if (readonly || e.touches.length !== 1) return;
-    const t = e.touches[0];
-    const cell = cellFromPoint(t.clientX, t.clientY);
-    if (!cell) return;
-    startSlot = slotAtPoint(cell, t.clientX,
-      cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
-    person = cell.dataset.person;
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      if (navigator.vibrate) navigator.vibrate(12);
-      gridSel.active = true;
-      gridSel.personId = person;
-      gridSel.anchor = startSlot;
-      gridSel.slots = [startSlot];
-      paintGridSel();
-      document.body.classList.add('selecting');
-    }, 420);
-  }, { passive: true });
-
-  grid.addEventListener('touchmove', (e) => {
-    if (!gridSel.active || !gridSel.personId) { clearTimeout(timer); return; }
-    if (e.touches.length !== 1) return;
-    const t = e.touches[0];
-    const cell = cellFromPoint(t.clientX, t.clientY);
-    if (!cell || cell.dataset.person !== gridSel.personId) return;
-    const slot = slotAtPoint(cell, t.clientX,
-      cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
-    extendGridSel(gridSel.personId, slot);
-  }, { passive: true });
-
-  grid.addEventListener('touchend', () => {
-    clearTimeout(timer);
-    if (gridSel.active && gridSel.slots.length) {
-      const el = document.querySelector(`[data-person="${gridSel.personId}"][data-slot="${gridSel.slots[0]}"]`);
-      if (el) openPicker(el, { personId: gridSel.personId, slots: gridSel.slots.slice() });
-    }
-  });
-
-  grid.addEventListener('touchcancel', () => {
-    clearTimeout(timer);
-    document.body.classList.remove('selecting');
   });
 }
 
@@ -1957,6 +1955,7 @@ document.addEventListener('keydown', (e) => {
     }
     closePicker();
     clearSelectedTask();
+    clearGridSel();
   }
 });
 
@@ -2364,11 +2363,17 @@ function showShareError() {
 }
 
 /* ---------------- zoom toggle ---------------- */
-function toggleZoom() {
-  zoomed = !zoomed;
+// Keep the button text and active state in sync with the current zoom mode
+function syncZoomButton() {
   const btn = $('fitBtn');
+  if (!btn) return;
   btn.textContent = zoomed ? '全顯示' : '放大';
   btn.classList.toggle('on', zoomed);
+}
+
+function toggleZoom() {
+  zoomed = !zoomed;
+  syncZoomButton();
   renderGrid();
   requestAnimationFrame(refreshScrollShadows);
 }
@@ -2526,6 +2531,7 @@ function bind() {
   bindMobile();
   bindGridInteraction();
   syncRuleFields();
+  syncZoomButton(); // start in enlarged mode, matching the zoomed default
 
   if (shared && shared.error) {
     showShareError();

@@ -1729,6 +1729,8 @@ function openPicker(anchor, ctx) {
     return;
   }
   const picker = $('picker');
+  // A sheet and the picker never share the screen: close an open sheet first
+  if (MOBILE.matches && document.body.classList.contains('sheet-open')) closeSheet();
   picker.textContent = '';
   pickerState = ctx;
 
@@ -1736,6 +1738,23 @@ function openPicker(anchor, ctx) {
   const from = ctx.slots[0];
   const to = addMin(ctx.slots[ctx.slots.length - 1], SLOT_MIN);
   const n = ctx.slots.length;
+
+  if (MOBILE.matches) {
+    // Bottom panel needs its own title row with a close control
+    const head = document.createElement('div');
+    head.className = 'pk-head';
+    const label = document.createElement('strong');
+    label.textContent = '選工作';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'pk-close';
+    close.id = 'pickerClose';
+    close.setAttribute('aria-label', '關閉');
+    close.textContent = '✕';
+    close.addEventListener('click', closePicker);
+    head.append(label, close);
+    picker.append(head);
+  }
 
   const title = document.createElement('div');
   title.className = 'pk-title';
@@ -1815,8 +1834,10 @@ function openPicker(anchor, ctx) {
     picker.style.left = '';
     picker.style.top = '';
     picker.classList.add('mobile');
+    document.body.classList.add('picker-open');
   } else {
     picker.classList.remove('mobile');
+    document.body.classList.remove('picker-open');
     const r = anchor.getBoundingClientRect();
     const pr = picker.getBoundingClientRect();
     let left = r.left;
@@ -1830,6 +1851,7 @@ function openPicker(anchor, ctx) {
 
 function closePicker() {
   $('picker').hidden = true;
+  document.body.classList.remove('picker-open');
   pickerState = null;
 }
 
@@ -1893,7 +1915,20 @@ function updateMobileTaskButton() {
 const MOBILE = window.matchMedia('(max-width: 760px)');
 let openSheetName = null;
 
+// Drag-to-dismiss thresholds: a quarter of the panel, or a quick downward flick
+const SHEET_CLOSE_RATIO = 0.25;
+const SHEET_CLOSE_VELOCITY = 0.6; // px per ms
+const SHEET_DRAG_SLOP = 4; // px before the sheet starts following the finger
+
+function resetSheetTransform() {
+  const panel = document.querySelector('.panel');
+  if (!panel) return;
+  panel.classList.remove('dragging');
+  panel.style.transform = '';
+}
+
 function openSheet(name) {
+  resetSheetTransform();
   openSheetName = name;
   document.body.dataset.sheet = name;
   document.body.classList.add('sheet-open');
@@ -1909,9 +1944,73 @@ function openSheet(name) {
 
 function closeSheet() {
   openSheetName = null;
+  const panel = document.querySelector('.panel');
+  if (panel) {
+    const wasDragging = panel.classList.contains('dragging');
+    panel.classList.remove('dragging');
+    // Dropped mid-drag: keep the offset so it slides out from the finger, then clear it
+    if (wasDragging) {
+      panel.style.transform = 'translateY(105%)';
+      setTimeout(() => {
+        if (!document.body.classList.contains('sheet-open')) panel.style.transform = '';
+      }, 260);
+    }
+  }
   document.body.classList.remove('sheet-open');
   for (const b of document.querySelectorAll('.mb-btn')) b.classList.remove('on');
   closePicker();
+}
+
+/* Drag the sheet down by its header; release past the thresholds dismisses it */
+function bindSheetDrag() {
+  const head = document.querySelector('.sheet-head');
+  const panel = document.querySelector('.panel');
+  if (!head || !panel) return;
+
+  let drag = null;
+
+  head.addEventListener('pointerdown', (e) => {
+    if (!MOBILE.matches || !openSheetName) return;
+    if (e.button !== 0) return;
+    // Let the header's own buttons keep their taps
+    if (e.target.closest('button')) return;
+    drag = { id: e.pointerId, startY: e.clientY, y: e.clientY, lastY: e.clientY, lastT: e.timeStamp, moved: false };
+    head.setPointerCapture(e.pointerId);
+  });
+
+  head.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dy = Math.max(0, e.clientY - drag.startY);
+    if (!drag.moved && dy < SHEET_DRAG_SLOP) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      panel.classList.add('dragging');
+    }
+    const dt = e.timeStamp - drag.lastT;
+    if (dt > 0) drag.velocity = (e.clientY - drag.lastY) / dt;
+    drag.lastY = e.clientY;
+    drag.lastT = e.timeStamp;
+    drag.y = e.clientY;
+    panel.style.transform = `translateY(${dy}px)`;
+  });
+
+  const finish = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dy = Math.max(0, drag.y - drag.startY);
+    // A stale sample (finger rested before release) must not count as a fling
+    const velocity = e.timeStamp - drag.lastT > 100 ? 0 : drag.velocity || 0;
+    const moved = drag.moved;
+    drag = null;
+    if (head.hasPointerCapture(e.pointerId)) head.releasePointerCapture(e.pointerId);
+    if (!moved) return;
+    // A fling counts only once the sheet has visibly moved
+    const flick = velocity > SHEET_CLOSE_VELOCITY && dy > 12;
+    if (dy > panel.offsetHeight * SHEET_CLOSE_RATIO || flick) closeSheet();
+    else resetSheetTransform();
+  };
+
+  head.addEventListener('pointerup', finish);
+  head.addEventListener('pointercancel', finish);
 }
 
 function toggleSheet(name) {
@@ -1923,7 +2022,11 @@ function bindMobile() {
   for (const b of document.querySelectorAll('.mb-btn')) {
     b.addEventListener('click', () => toggleSheet(b.dataset.sheet));
   }
-  $('scrim').addEventListener('click', closeSheet);
+  bindSheetDrag();
+  $('scrim').addEventListener('click', () => {
+    if (pickerState) closePicker();
+    closeSheet();
+  });
   $('sheetClose').addEventListener('click', closeSheet);
   $('mbTask').addEventListener('click', () => {
     if (selectedTaskId) {
@@ -2207,7 +2310,14 @@ function updateScrollShadow(el) {
 }
 
 function watchScrollables() {
-  const targets = [document.querySelector('.board'), document.querySelector('.panel'), document.querySelector('.issues')];
+  const targets = [
+    document.querySelector('.board'),
+    document.querySelector('.panel'),
+    document.querySelector('.issues'),
+    // Horizontally scrolling strips in the mobile top bar
+    document.querySelector('.toolbar'),
+    document.querySelector('.actions'),
+  ];
   for (const el of targets) {
     if (!el || el.dataset.shadowWatched) continue;
     el.dataset.shadowWatched = '1';

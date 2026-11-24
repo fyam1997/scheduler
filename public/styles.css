@@ -693,24 +693,48 @@ body.selecting .sl { cursor: crosshair; }
 @media (max-width: 760px) {
   .sheet-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    padding-bottom: 10px;
-    margin-bottom: 2px;
+    column-gap: 8px;
+    row-gap: 2px;
+    /* The panel loses its top padding so sticky top:0 lands on the panel edge;
+       the header supplies the top inset itself and bleeds to the panel sides. */
+    margin: 0 -14px 2px;
+    padding: 12px 14px 10px;
     border-bottom: 1px solid var(--line);
     position: sticky;
     top: 0;
     background: var(--panel);
     z-index: 1;
+    /* The header is the drag handle, so the page must not scroll under it */
+    touch-action: none;
   }
   .sheet-head strong { font-size: 14px; }
+  /* The grip gets its own full-width row and a centred bar; the whole row is a
+     comfortable drag target instead of a 4px sliver. */
   .sheet-grip {
+    flex: 1 0 100%;
+    position: relative;
+    width: auto;
+    height: 14px;
+    margin: -4px 0 0;
+    border-radius: 0;
+    background: none;
+    cursor: grab;
+  }
+  .sheet-grip::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 4px;
     width: 34px;
     height: 4px;
+    margin-left: -17px;
     border-radius: 2px;
     background: #d7dfea;
-    flex: 0 0 auto;
   }
+  .panel.dragging { transition: none; user-select: none; }
+  .panel.dragging .sheet-grip { cursor: grabbing; }
   .sheet-close {
     margin-left: auto;
     border: 0;
@@ -745,14 +769,17 @@ body.selecting .sl { cursor: crosshair; }
   .title-input { font-size: 16px; width: 100%; min-width: 0; }
   .save-status { display: none; }
 
+  /* The scrolling strips span the screen edges: negative inline margins cancel the
+     topbar padding, and the equal inline padding keeps the first/last item inset
+     (and scrollable to/past the edge). No side safe-area inset is used here. */
   .toolbar,
   .actions {
     flex: 1 0 100%;
     flex-wrap: nowrap;
     gap: 6px;
     overflow-x: auto;
-    padding-bottom: 1px;
-    margin-left: 0;
+    padding: 0 10px 1px;
+    margin-inline: -10px;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
@@ -777,7 +804,7 @@ body.selecting .sl { cursor: crosshair; }
     width: auto;
     flex: none;
     max-height: 74vh;
-    padding: 12px 14px calc(14px + env(safe-area-inset-bottom));
+    padding: 0 14px calc(14px + env(safe-area-inset-bottom));
     border-right: 0;
     border-top: 1px solid var(--line);
     border-radius: 16px 16px 0 0;
@@ -821,6 +848,8 @@ body.selecting .sl { cursor: crosshair; }
     transition: opacity 0.2s;
   }
   body.sheet-open .scrim { display: block; opacity: 1; pointer-events: auto; }
+  /* The mobile picker is a bottom panel too, so it gets the same dimmed backdrop */
+  body.picker-open .scrim { display: block; opacity: 1; pointer-events: auto; }
 
   /* Bottom action bar */
   .mobilebar {
@@ -942,7 +971,29 @@ body.selecting .sl { cursor: crosshair; }
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
     box-shadow: 0 -12px 40px rgba(16, 24, 40, 0.22);
     max-height: 62vh;
+    z-index: 48; /* above the scrim (45), below the sheet (50) */
   }
+  .pk-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 2px 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .pk-head strong { font-size: 14px; }
+  .pk-close {
+    margin-left: auto;
+    border: 0;
+    background: #f2f5fa;
+    color: var(--ink-soft);
+    border-radius: 999px;
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .pk-close:active { background: #e6ecf6; }
   .pk-item { padding: 12px 12px; font-size: 14.5px; }
 
   .marker { display: none; }

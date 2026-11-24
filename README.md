@@ -61,17 +61,18 @@ npm start
 按「分享連結」會把整份班表編碼成 URL fragment：
 
 ```
-https://<user>.github.io/scheduler/#d=j1.eyJ0aXRsZSI6...
+https://<user>.github.io/scheduler/#d=j3.dZI_axtBEMW...
 ```
 
 - 用 `#` 而非 query string：fragment 不會送到伺服器，不會進 access log。
-- 編碼：JSON → UTF-8 bytes → base64url，前綴 `j1.` 表示格式版本。中文名字正常處理。
+- 編碼：緊湊 JSON → `deflate-raw` → base64url，前綴 `j3.` 表示格式版本。中文名字正常處理。
+- 舊連結仍然可讀：`j2.`（緊湊 JSON，未壓縮）、`j1.`（完整 JSON）。
 - 一次性快照：之後再改自己的班表，舊連結不會跟著變。
 - 打開分享連結預設 **唯讀**：頂部顯示 banner，所有編輯入口停用。
 - 按「複製這份來改」→ 清掉 URL 的 `#d=`、寫入自己的 `localStorage`、解除唯讀，之後就是自己的班表。
-- 解碼時逐欄驗證（欄位類型、時間格式、id 是否存在、上限 200 人／工作），壞連結顯示提示而不是白屏。
+- 解碼時逐欄驗證（欄位類型、時間格式、id 是否存在、上限 99 人／36 工作），壞連結顯示提示而不是白屏。
 
-體積參考：3 人 × 9 小時（46 個排班）約 2.3 KB 字元。
+體積參考：7 人 × 8 小時（80 個排班）約 515 個字元，同內容用 `j1.` 是 3.7 KB。
 
 ## 部署到 GitHub Pages
 

@@ -1,2 +1,7 @@
 node_modules/
 data/
+
+.tmp/
+.openchamber/
+rota-*.txt
+rota-*.json

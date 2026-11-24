@@ -879,9 +879,12 @@ body.selecting .sl { cursor: crosshair; }
   .person-row, .task-row { padding: 9px 8px; }
   .rule-row { padding: 9px 8px; }
 
-  /* Grid: no horizontal scrolling; columns shrink to fit */
+  /* Grid: fit-all mode shrinks columns; enlarged mode (the default) scrolls horizontally */
   :root { --name-w: 84px; --row-h: 52px; }
   .board { padding: 10px 6px 12px; }
+  /* Enlarged columns on a phone: 40px per half hour keeps "HH:MM" readable
+     while still showing about 3.5 hours of the shift at once */
+  .grid.zoomed { grid-template-columns: var(--name-w) repeat(var(--half-cols), 40px); }
   .grid { border-radius: 10px; }
   .person-name { padding: 5px 6px; font-size: 11px; gap: 4px; }
   .person-name .dot { display: none; }

@@ -22,7 +22,7 @@ let saveTimer = null;
 let dragging = null;
 let moving = null; // touch move mode: { personId, slots[] }
 let selectedTaskId = null;
-let zoomed = false; // false = fit all hours on screen; true = enlarged with horizontal scroll
+let zoomed = true; // true = enlarged with horizontal scroll (default); false = fit all hours on screen
 let warnings = [];
 let warnCells = new Map();
 let warnPeople = new Map();
@@ -2253,11 +2253,17 @@ function showShareError() {
 }
 
 /* ---------------- zoom toggle ---------------- */
-function toggleZoom() {
-  zoomed = !zoomed;
+// Keep the button text and active state in sync with the current zoom mode
+function syncZoomButton() {
   const btn = $('fitBtn');
+  if (!btn) return;
   btn.textContent = zoomed ? '全顯示' : '放大';
   btn.classList.toggle('on', zoomed);
+}
+
+function toggleZoom() {
+  zoomed = !zoomed;
+  syncZoomButton();
   renderGrid();
   requestAnimationFrame(refreshScrollShadows);
 }
@@ -2396,6 +2402,7 @@ function bind() {
   bindMobile();
   bindGridInteraction();
   syncRuleFields();
+  syncZoomButton(); // start in enlarged mode, matching the zoomed default
 
   if (shared && shared.error) {
     showShareError();

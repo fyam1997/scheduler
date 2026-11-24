@@ -828,6 +828,8 @@ body.selecting .sl { cursor: crosshair; }
     transition: opacity 0.2s;
   }
   body.sheet-open .scrim { display: block; opacity: 1; pointer-events: auto; }
+  /* The mobile picker is a bottom panel too, so it gets the same dimmed backdrop */
+  body.picker-open .scrim { display: block; opacity: 1; pointer-events: auto; }
 
   /* Bottom action bar */
   .mobilebar {
@@ -949,7 +951,29 @@ body.selecting .sl { cursor: crosshair; }
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
     box-shadow: 0 -12px 40px rgba(16, 24, 40, 0.22);
     max-height: 62vh;
+    z-index: 48; /* above the scrim (45), below the sheet (50) */
   }
+  .pk-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 2px 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .pk-head strong { font-size: 14px; }
+  .pk-close {
+    margin-left: auto;
+    border: 0;
+    background: #f2f5fa;
+    color: var(--ink-soft);
+    border-radius: 999px;
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .pk-close:active { background: #e6ecf6; }
   .pk-item { padding: 12px 12px; font-size: 14.5px; }
 
   .marker { display: none; }

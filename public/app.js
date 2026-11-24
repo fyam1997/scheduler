@@ -1782,6 +1782,8 @@ function openPicker(anchor, ctx) {
     return;
   }
   const picker = $('picker');
+  // A sheet and the picker never share the screen: close an open sheet first
+  if (MOBILE.matches && document.body.classList.contains('sheet-open')) closeSheet();
   picker.textContent = '';
   pickerState = ctx;
 
@@ -1789,6 +1791,23 @@ function openPicker(anchor, ctx) {
   const from = ctx.slots[0];
   const to = addMin(ctx.slots[ctx.slots.length - 1], SLOT_MIN);
   const n = ctx.slots.length;
+
+  if (MOBILE.matches) {
+    // Bottom panel needs its own title row with a close control
+    const head = document.createElement('div');
+    head.className = 'pk-head';
+    const label = document.createElement('strong');
+    label.textContent = '選工作';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'pk-close';
+    close.id = 'pickerClose';
+    close.setAttribute('aria-label', '關閉');
+    close.textContent = '✕';
+    close.addEventListener('click', closePicker);
+    head.append(label, close);
+    picker.append(head);
+  }
 
   const title = document.createElement('div');
   title.className = 'pk-title';
@@ -1868,8 +1887,10 @@ function openPicker(anchor, ctx) {
     picker.style.left = '';
     picker.style.top = '';
     picker.classList.add('mobile');
+    document.body.classList.add('picker-open');
   } else {
     picker.classList.remove('mobile');
+    document.body.classList.remove('picker-open');
     const r = anchor.getBoundingClientRect();
     const pr = picker.getBoundingClientRect();
     let left = r.left;
@@ -1883,6 +1904,7 @@ function openPicker(anchor, ctx) {
 
 function closePicker() {
   $('picker').hidden = true;
+  document.body.classList.remove('picker-open');
   pickerState = null;
 }
 
@@ -1997,7 +2019,10 @@ function bindMobile() {
   for (const b of document.querySelectorAll('.mb-btn')) {
     b.addEventListener('click', () => toggleSheet(b.dataset.sheet));
   }
-  $('scrim').addEventListener('click', closeSheet);
+  $('scrim').addEventListener('click', () => {
+    if (pickerState) closePicker();
+    closeSheet();
+  });
   $('sheetClose').addEventListener('click', closeSheet);
   $('mbTask').addEventListener('click', () => {
     if (selectedTaskId) {

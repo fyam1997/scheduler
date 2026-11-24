@@ -2281,7 +2281,14 @@ function updateScrollShadow(el) {
 }
 
 function watchScrollables() {
-  const targets = [document.querySelector('.board'), document.querySelector('.panel'), document.querySelector('.issues')];
+  const targets = [
+    document.querySelector('.board'),
+    document.querySelector('.panel'),
+    document.querySelector('.issues'),
+    // Horizontally scrolling strips in the mobile top bar
+    document.querySelector('.toolbar'),
+    document.querySelector('.actions'),
+  ];
   for (const el of targets) {
     if (!el || el.dataset.shadowWatched) continue;
     el.dataset.shadowWatched = '1';

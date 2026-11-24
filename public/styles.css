@@ -749,14 +749,17 @@ body.selecting .sl { cursor: crosshair; }
   .title-input { font-size: 16px; width: 100%; min-width: 0; }
   .save-status { display: none; }
 
+  /* The scrolling strips span the screen edges: negative inline margins cancel the
+     topbar padding, and the equal inline padding keeps the first/last item inset
+     (and scrollable to/past the edge). No side safe-area inset is used here. */
   .toolbar,
   .actions {
     flex: 1 0 100%;
     flex-wrap: nowrap;
     gap: 6px;
     overflow-x: auto;
-    padding-bottom: 1px;
-    margin-left: 0;
+    padding: 0 10px 1px;
+    margin-inline: -10px;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }

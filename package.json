@@ -1,0 +1,11 @@
+{
+  "name": "scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "description": "半小時精度的排班表，附條件驗證與 URL 分享",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "license": "MIT"
+}

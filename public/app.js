@@ -1216,6 +1216,7 @@ function renderGrid() {
     nameCell.className = 'cell person-name';
     nameCell.style.gridColumn = '1';
     nameCell.style.gridRow = String(rowIndex);
+    nameCell.dataset.person = person.id;
 
     const dot = document.createElement('span');
     dot.className = 'dot';
@@ -1691,11 +1692,8 @@ function placeMoving(personId, startSlot) {
 }
 
 /* ---------------- render: issues ---------------- */
-function renderIssues() {
-  const box = $('issues');
-  box.textContent = '';
-  if (!state.rules.length) return;
-
+// Group flat warnings by rule and person; shared by the chip strip and the dialog
+function issueGroups() {
   const groups = new Map();
   for (const w of warnings) {
     const gk = `${w.ruleId}|${w.personId || ''}`;
@@ -1714,26 +1712,130 @@ function renderIssues() {
     if (!g.messages.includes(w.message)) g.messages.push(w.message);
     groups.set(gk, g);
   }
+  return groups;
+}
+
+function issueLabel(g) {
+  const rule = state.rules.find((r) => r.id === g.ruleId);
+  const person = g.personId ? personById(g.personId) : null;
+  const who = person ? `${person.name}：` : '';
+  const extra = g.count > 1 ? `（${g.count} 個時段）` : '';
+  return `⚠ ${who}${ruleShort(rule)} ${g.missing ? `缺 ${g.missing} 人次` : ''}${extra}`.trim();
+}
+
+function jumpToIssue(g) {
+  if (g.personId) {
+    const el = document.querySelector(`.person-name[data-person="${g.personId}"]`);
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+  const target = g.first ? document.querySelector(`.h-hour[data-hour="${hourOf(g.first)}"]`) : null;
+  if (target) target.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+}
+
+function openWarningModal() {
+  const dlg = $('warningModal');
+  const body = $('warningModalBody');
+  if (!dlg || !body || !body.childElementCount) return;
+  if (typeof dlg.showModal === 'function') {
+    if (!dlg.open) dlg.showModal();
+  } else {
+    dlg.setAttribute('open', ''); // very old browsers: plain block dialog
+  }
+}
+
+function closeWarningModal() {
+  const dlg = $('warningModal');
+  if (!dlg || !dlg.open) return;
+  if (typeof dlg.close === 'function') dlg.close();
+  else dlg.removeAttribute('open');
+}
+
+// Fill the dialog body with every group. Rebuilt on each render; an open dialog
+// keeps its position and just refreshes its contents.
+function renderWarningModal(groups) {
+  const body = $('warningModalBody');
+  if (!body) return;
+  // Keep the reader's place when the dialog is open and the data changes
+  const keepScroll = body.scrollTop;
+  body.textContent = '';
 
   for (const g of groups.values()) {
     const rule = state.rules.find((r) => r.id === g.ruleId);
     const person = g.personId ? personById(g.personId) : null;
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'issue';
-    const who = person ? `${person.name}：` : '';
-    const extra = g.count > 1 ? `（${g.count} 個時段）` : '';
-    b.textContent = `⚠ ${who}${ruleShort(rule)} ${g.missing ? `缺 ${g.missing} 人次` : ''}${extra}`.trim();
-    b.title = g.messages.join('\n');
-    b.addEventListener('click', () => {
-      if (g.personId && g.first) {
-        const el = document.querySelector(`.person-name`);
-        if (el) el.scrollIntoView({ block: 'nearest' });
-      }
-      const target = g.first ? document.querySelector(`.h-hour[data-hour="${hourOf(g.first)}"]`) : null;
-      if (target) target.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'warn-item';
+
+    const head = document.createElement('span');
+    head.className = 'warn-item-head';
+    const title = document.createElement('span');
+    title.textContent = `⚠ ${person ? `${person.name}：` : ''}${ruleShort(rule)}`;
+    const meta = document.createElement('span');
+    meta.className = 'warn-item-meta';
+    const bits = [];
+    bits.push(`${g.count} 個時段`);
+    if (g.missing) bits.push(`缺 ${g.missing} 人次`);
+    if (g.first) bits.push(`最早 ${g.first}`);
+    meta.textContent = bits.join(' · ');
+    head.append(title, meta);
+
+    const msgs = document.createElement('ul');
+    msgs.className = 'warn-item-msgs';
+    for (const m of g.messages) {
+      const li = document.createElement('li');
+      li.textContent = m;
+      msgs.append(li);
+    }
+
+    row.append(head, msgs);
+    if (rule) row.title = ruleLabel(rule);
+    row.addEventListener('click', () => {
+      closeWarningModal();
+      jumpToIssue(g);
     });
-    box.append(b);
+    body.append(row);
+  }
+
+  if (!groups.size) closeWarningModal();
+  else body.scrollTop = keepScroll;
+}
+
+function renderIssues() {
+  const box = $('issues');
+  box.textContent = '';
+  if (!state.rules.length) {
+    renderWarningModal(new Map());
+    return;
+  }
+
+  const groups = issueGroups();
+  renderWarningModal(groups);
+  if (!groups.size) return;
+
+  const list = [...groups.values()];
+
+  // Single visible chip: the first group. Long text ellipsizes; a second chip
+  // says how many more groups the dialog holds.
+  const first = document.createElement('button');
+  first.type = 'button';
+  first.className = 'issue';
+  first.textContent = issueLabel(list[0]);
+  first.title = list[0].messages.join('\n');
+  first.addEventListener('click', () => {
+    if (list.length > 1) openWarningModal();
+    else jumpToIssue(list[0]);
+  });
+  box.append(first);
+
+  if (list.length > 1) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'issue-more';
+    more.textContent = `還有 ${list.length - 1} 個問題…`;
+    more.title = '看全部條件警告';
+    more.addEventListener('click', openWarningModal);
+    box.append(more);
   }
 }
 
@@ -1867,6 +1969,13 @@ document.addEventListener('mousedown', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    // The dialog is topmost: close it and leave the grid state alone
+    const dlg = $('warningModal');
+    if (dlg && dlg.open) {
+      e.preventDefault();
+      closeWarningModal();
+      return;
+    }
     if (moving) {
       moving = null;
       document.body.classList.remove('moving');
@@ -2357,6 +2466,18 @@ function bind() {
       e.preventDefault();
       undo();
     }
+  });
+
+  // Warning dialog: close button plus a click on the backdrop (Escape is native to <dialog>)
+  const warnModal = $('warningModal');
+  $('warningModalClose').addEventListener('click', closeWarningModal);
+  warnModal.addEventListener('click', (e) => {
+    if (e.target !== warnModal) return;
+    // Clicks inside the panel also target the dialog, so compare against its box
+    const r = warnModal.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right
+      && e.clientY >= r.top && e.clientY <= r.bottom;
+    if (!inside) closeWarningModal();
   });
 }
 

@@ -811,7 +811,7 @@ function makeSortable(listEl, kind, onReorder) {
     if (readonly) return;
     const row = e.target.closest('[data-id]');
     if (!row) return;
-    // Only treat this as reordering when the grip is held; otherwise the task row drags to the grid
+    // Only the grip starts a sort drag; the rest of the row keeps its own behaviour
     if (!e.target.closest('.grip')) return;
     listDrag = { kind, id: row.dataset.id };
     row.classList.add('sorting');
@@ -879,12 +879,12 @@ function renderLists() {
     const li = document.createElement('li');
     li.className = 'person-row';
     li.dataset.id = p.id;
-    li.draggable = !readonly;
 
     const grip = document.createElement('span');
     grip.className = 'grip';
     grip.textContent = '⋮⋮';
     grip.title = '拖動排序';
+    grip.draggable = !readonly;
 
     const sw = document.createElement('input');
     sw.type = 'color';
@@ -986,6 +986,7 @@ function renderLists() {
     grip.className = 'grip';
     grip.textContent = '⋮⋮';
     grip.title = '拖動排序（拖出右邊可放到時間表）';
+    grip.draggable = !readonly;
 
     const sw = document.createElement('input');
     sw.type = 'color';
@@ -1092,11 +1093,11 @@ function renderRules() {
     const li = document.createElement('li');
     li.className = `rule-row type-${rule.type}`;
     li.dataset.id = rule.id;
-    li.draggable = !readonly;
     const grip = document.createElement('span');
     grip.className = 'grip';
     grip.textContent = '⋮⋮';
     grip.title = '拖動排序';
+    grip.draggable = !readonly;
     li.append(grip);
     const badge = document.createElement('span');
     badge.className = 'rule-badge';

@@ -116,6 +116,20 @@ async function readBody(req) {
 }
 
 async function serveStatic(req, res, urlPath) {
+  // 本機測試頁（唔會上 GitHub Pages）
+  if (urlPath === '/test-drag.html') {
+    try {
+      const buf = await fsp.readFile(path.join(ROOT, '.tmp', 'test-drag.html'));
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(buf);
+      return;
+    } catch {
+      res.writeHead(404);
+      res.end('no test page');
+      return;
+    }
+  }
+
   const rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath).replace(/^\/+/, '');
   const file = path.join(PUBLIC_DIR, rel);
   if (!file.startsWith(PUBLIC_DIR)) {

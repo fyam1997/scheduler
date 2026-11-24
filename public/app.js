@@ -615,6 +615,74 @@ function evaluateRules() {
   }
 }
 
+/* ---------------- 列表拖曳排序 ---------------- */
+let listDrag = null; // { kind, id, startY }
+
+function makeSortable(listEl, kind, onReorder) {
+  listEl.addEventListener('dragstart', (e) => {
+    if (readonly) return;
+    const row = e.target.closest('[data-id]');
+    if (!row) return;
+    // 只在按住手柄時才算「排序」，否則交由工作卡本身處理（可拖到時間表）
+    if (!e.target.closest('.grip')) return;
+    listDrag = { kind, id: row.dataset.id };
+    row.classList.add('sorting');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'sort', kind, id: row.dataset.id }));
+    }
+  });
+
+  listEl.addEventListener('dragover', (e) => {
+    if (!listDrag || listDrag.kind !== kind) return;
+    const row = e.target.closest('[data-id]');
+    if (!row || row.dataset.id === listDrag.id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = row.getBoundingClientRect();
+    const after = e.clientY > r.top + r.height / 2;
+    row.classList.toggle('drop-before', !after);
+    row.classList.toggle('drop-after', after);
+  });
+
+  listEl.addEventListener('dragleave', (e) => {
+    const row = e.target.closest('[data-id]');
+    if (row) row.classList.remove('drop-before', 'drop-after');
+  });
+
+  listEl.addEventListener('drop', (e) => {
+    if (!listDrag || listDrag.kind !== kind) return;
+    const row = e.target.closest('[data-id]');
+    if (!row) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = row.getBoundingClientRect();
+    const after = e.clientY > r.top + r.height / 2;
+    const from = listDrag.id;
+    const to = row.dataset.id;
+    row.classList.remove('drop-before', 'drop-after');
+    if (from !== to) onReorder(from, to, after);
+    listDrag = null;
+  });
+
+  listEl.addEventListener('dragend', () => {
+    listDrag = null;
+    for (const el of listEl.querySelectorAll('[data-id]')) {
+      el.classList.remove('sorting', 'drop-before', 'drop-after');
+    }
+  });
+}
+
+function reorderList(arr, fromId, toId, after) {
+  const from = arr.findIndex((x) => x.id === fromId);
+  const to = arr.findIndex((x) => x.id === toId);
+  if (from < 0 || to < 0 || from === to) return false;
+  const [item] = arr.splice(from, 1);
+  const t2 = arr.findIndex((x) => x.id === toId);
+  arr.splice(after ? t2 + 1 : t2, 0, item);
+  return true;
+}
+
 /* ---------------- render: sidebar ---------------- */
 function renderLists() {
   const peopleList = $('peopleList');
@@ -623,6 +691,12 @@ function renderLists() {
     const li = document.createElement('li');
     li.className = 'person-row';
     li.dataset.id = p.id;
+    li.draggable = !readonly;
+
+    const grip = document.createElement('span');
+    grip.className = 'grip';
+    grip.textContent = '⋮⋮';
+    grip.title = '拖動排序';
 
     const sw = document.createElement('input');
     sw.type = 'color';
@@ -704,7 +778,7 @@ function renderLists() {
       });
     });
 
-    li.append(sw, name, del);
+    li.append(grip, sw, name, del);
     meta.append(fromIn, toIn, ex);
     li.append(meta);
     peopleList.append(li);
@@ -719,6 +793,11 @@ function renderLists() {
     li.style.setProperty('--task-color', t.color);
     li.draggable = true;
     li.dataset.id = t.id;
+
+    const grip = document.createElement('span');
+    grip.className = 'grip';
+    grip.textContent = '⋮⋮';
+    grip.title = '拖動排序（拖出右邊可放到時間表）';
 
     const sw = document.createElement('input');
     sw.type = 'color';
@@ -785,7 +864,7 @@ function renderLists() {
       });
     });
 
-    li.append(sw, name, brk, del);
+    li.append(grip, sw, name, brk, del);
 
     li.addEventListener('dragstart', (e) => {
       setDragPayload(e, { type: 'task', taskId: t.id });
@@ -824,6 +903,13 @@ function renderRules() {
   for (const rule of state.rules) {
     const li = document.createElement('li');
     li.className = `rule-row type-${rule.type}`;
+    li.dataset.id = rule.id;
+    li.draggable = !readonly;
+    const grip = document.createElement('span');
+    grip.className = 'grip';
+    grip.textContent = '⋮⋮';
+    grip.title = '拖動排序';
+    li.append(grip);
     const badge = document.createElement('span');
     badge.className = 'rule-badge';
     badge.textContent = RULE_TYPES[rule.type] || '條件';
@@ -856,6 +942,25 @@ function renderRules() {
     sel.append(o);
   }
   if (state.tasks.some((t) => t.id === prev)) sel.value = prev;
+
+  // 排序手柄：列表重繪後重新綁定
+  bindSortOnce();
+}
+
+let sortBound = false;
+function bindSortOnce() {
+  if (sortBound) return;
+  sortBound = true;
+
+  makeSortable($('peopleList'), 'people', (from, to, after) => {
+    commit(() => { reorderList(state.people, from, to, after); });
+  });
+  makeSortable($('taskList'), 'tasks', (from, to, after) => {
+    commit(() => { reorderList(state.tasks, from, to, after); });
+  });
+  makeSortable($('ruleList'), 'rules', (from, to, after) => {
+    commit(() => { reorderList(state.rules, from, to, after); });
+  });
 }
 
 /* ---------------- render: grid ---------------- */
@@ -1042,21 +1147,7 @@ function buildEmptyCell(person, slot, colStart, rowIndex) {
   }
   if (selectedTaskId) el.classList.add('fillable');
 
-  el.addEventListener('click', () => {
-    if (readonly) return;
-    if (moving) {
-      placeMoving(person.id, slot);
-      return;
-    }
-    if (selectedTaskId) {
-      const id = selectedTaskId;
-      commit(() => {
-        state.assignments[key(person.id, slot)] = id;
-      });
-      return;
-    }
-    openPicker(el, { personId: person.id, slots: [slot] });
-  });
+  el.dataset.empty = '1';
   attachDrop(el, person.id, slot);
   return el;
 }
@@ -1072,6 +1163,16 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
   el.draggable = true;
   el.dataset.person = person.id;
   el.dataset.slot = blockSlots[0];
+  el.dataset.span = String(blockSlots.length);
+  el.dataset.slots = blockSlots.join(',');
+
+  // 內部半小時分隔（虛線）
+  for (let k = 1; k < blockSlots.length; k += 1) {
+    const sep = document.createElement('i');
+    sep.className = 'block-sep';
+    sep.style.left = `${(k / blockSlots.length) * 100}%`;
+    el.append(sep);
+  }
 
   const label = document.createElement('span');
   label.className = 'block-label';
@@ -1090,7 +1191,6 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
   const cellWarn = [...new Set(blockSlots.flatMap((s) => warnCells.get(key(person.id, s)) || []))];
   if (cellWarn.length) {
     el.classList.add('has-warn');
-    // 警告標記放在第一個出問題的半小時上，避免被推到區塊末端
     const firstIdx = blockSlots.findIndex((s) => warnCells.has(key(person.id, s)));
     const badge = document.createElement('span');
     badge.className = 'warn-badge';
@@ -1100,45 +1200,39 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
     el.append(badge);
   }
 
-  el.title = `${task.name} ${blockSlots[0]}–${addMin(blockSlots[blockSlots.length - 1], SLOT_MIN)}（拖到別的格可搬移）`;
+  el.title = `${task.name} ${blockSlots[0]}–${addMin(blockSlots[blockSlots.length - 1], SLOT_MIN)}（每格可分開點／拖）`;
 
   el.addEventListener('dragstart', (e) => {
     e.stopPropagation();
-    setDragPayload(e, { type: 'move', taskId: task.id, personId: person.id, slots: blockSlots.slice() });
+    // 只搬移指標所在那一格，其餘格不動
+    const slot = slotAtPoint(el, e.clientX, blockSlots);
+    setDragPayload(e, { type: 'move', taskId: task.id, personId: person.id, slots: [slot] });
+    el.classList.add('dragging');
   });
   el.addEventListener('dragend', () => {
     dragging = null;
-  });
-  el.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (readonly) return;
-    if (moving) {
-      placeMoving(person.id, blockSlots[0]);
-      return;
-    }
-    if (selectedTaskId && selectedTaskId !== task.id) {
-      const id = selectedTaskId;
-      commit(() => {
-        for (const s of blockSlots) state.assignments[key(person.id, s)] = id;
-      });
-      return;
-    }
-    openPicker(el, { personId: person.id, slots: blockSlots.slice() });
+    el.classList.remove('dragging');
   });
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     if (readonly) return;
-    // 右鍵只清游標所在的那半小時，可把連續工作切開
-    const rect = el.getBoundingClientRect();
-    const step = rect.width / blockSlots.length;
-    const idx = Math.min(blockSlots.length - 1, Math.max(0, Math.floor((e.clientX - rect.left) / step)));
+    const slot = slotAtPoint(el, e.clientX, blockSlots);
     commit(() => {
-      delete state.assignments[key(person.id, blockSlots[idx])];
+      delete state.assignments[key(person.id, slot)];
     });
   });
 
   attachDrop(el, person.id, blockSlots[0]);
   return el;
+}
+
+// 依指標 x 座標算出落在合併區塊的第幾格
+function slotAtPoint(el, clientX, blockSlots) {
+  if (blockSlots.length <= 1) return blockSlots[0];
+  const r = el.getBoundingClientRect();
+  const ratio = (clientX - r.left) / r.width;
+  const idx = Math.min(blockSlots.length - 1, Math.max(0, Math.floor(ratio * blockSlots.length)));
+  return blockSlots[idx];
 }
 
 function attachDrop(el, personId, startSlot) {
@@ -1156,7 +1250,255 @@ function attachDrop(el, personId, startSlot) {
     const payload = readDropPayload(e);
     dragging = null;
     if (!payload || !payload.taskId) return;
-    applyDrop(payload, personId, startSlot);
+    // 落點：依指標位置決定實際格（合併區塊只影響 SPAN 那一格）
+    const span = Number(el.dataset.span || 1);
+    const blockSlots = span > 1 ? el.dataset.slots.split(',') : [startSlot];
+    const slot = slotAtPoint(el, e.clientX, blockSlots);
+    applyDrop(payload, personId, slot);
+  });
+}
+
+/* ---------------- 格互動：點擊 / 長按 / 橫向拖選 ---------------- */
+const gridSel = {
+  active: false,
+  personId: null,
+  anchor: null, // slot string
+  slots: [],
+  dragging: false,
+  startX: 0,
+  startY: 0,
+  pointerId: null,
+  moved: false,
+};
+
+function clearGridSel() {
+  gridSel.active = false;
+  gridSel.personId = null;
+  gridSel.anchor = null;
+  gridSel.slots = [];
+  gridSel.dragging = false;
+  gridSel.moved = false;
+  for (const el of document.querySelectorAll('.sel-range')) el.classList.remove('sel-range');
+}
+
+function paintGridSel() {
+  for (const el of document.querySelectorAll('.sel-range')) el.classList.remove('sel-range');
+  for (const el of document.querySelectorAll('.sel-overlay')) el.remove();
+  if (!gridSel.active || !gridSel.slots.length) return;
+
+  const selSet = new Set(gridSel.slots);
+  const sl = slots();
+  const cells = document.querySelectorAll(`[data-person="${gridSel.personId}"]`);
+
+  for (const el of cells) {
+    const elSlots = el.dataset.slots ? el.dataset.slots.split(',') : [el.dataset.slot];
+    if (elSlots.length === 1) {
+      if (selSet.has(elSlots[0])) el.classList.add('sel-range');
+      continue;
+    }
+    // 合併區塊：逐格標記選中的部分
+    const isBlock = el.classList.contains('block');
+    elSlots.forEach((s, idx) => {
+      if (!selSet.has(s)) return;
+      if (!isBlock) { el.classList.add('sel-range'); return; }
+      const ov = document.createElement('i');
+      ov.className = 'sel-overlay';
+      ov.style.left = `${(idx / elSlots.length) * 100}%`;
+      ov.style.width = `${(1 / elSlots.length) * 100}%`;
+      el.append(ov);
+    });
+    // 若整塊都被選 → 加整體外框
+    if (elSlots.every((s) => selSet.has(s))) el.classList.add('sel-range');
+  }
+}
+
+function extendGridSel(personId, slot) {
+  if (!gridSel.active || gridSel.personId !== personId) return;
+  const sl = slots();
+  const a = sl.indexOf(gridSel.anchor);
+  const b = sl.indexOf(slot);
+  if (a < 0 || b < 0) return;
+  const [from, to] = a <= b ? [a, b] : [b, a];
+  gridSel.slots = sl.slice(from, to + 1);
+  paintGridSel();
+}
+
+function cellFromPoint(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const cell = el.closest('[data-person][data-slot]');
+  if (!cell) return null;
+  if (cell.classList.contains('offshift')) return null;
+  return cell;
+}
+
+function bindGridInteraction() {
+  // 用格層的統一委派，處理 click / 拖選
+  const grid = $('grid');
+
+  grid.addEventListener('pointerdown', (e) => {
+    if (readonly || e.button !== 0) return;
+    if (e.target.closest('.person-name, .h-hour, .h-name')) return;
+    const cell = cellFromPoint(e.clientX, e.clientY);
+    if (!cell) return;
+    if (e.pointerType === 'mouse' && e.shiftKey) {
+      // Shift = 擴充選取
+      if (gridSel.active) {
+        extendGridSel(cell.dataset.person, cell.dataset.slot);
+        e.preventDefault();
+      }
+      return;
+    }
+    gridSel.pointerId = e.pointerId;
+    gridSel.startX = e.clientX;
+    gridSel.startY = e.clientY;
+    gridSel.moved = false;
+    gridSel.dragging = false;
+    // 暫時只記下起點，真正開始選取要在 pointermove 超過門檻
+    gridSel.pendingCell = cell;
+  });
+
+  grid.addEventListener('pointermove', (e) => {
+    if (!gridSel.pendingCell || e.pointerId !== gridSel.pointerId) return;
+    const dx = Math.abs(e.clientX - gridSel.startX);
+    const dy = Math.abs(e.clientY - gridSel.startY);
+    if (!gridSel.dragging && Math.max(dx, dy) < 6) return;
+    if (!gridSel.dragging) {
+      // 開始拖選：只限橫向（同一個人）
+      gridSel.dragging = true;
+      gridSel.active = true;
+      gridSel.personId = gridSel.pendingCell.dataset.person;
+      const firstSlot = slotAtPoint(gridSel.pendingCell, gridSel.startX,
+        gridSel.pendingCell.dataset.slots ? gridSel.pendingCell.dataset.slots.split(',') : [gridSel.pendingCell.dataset.slot]);
+      gridSel.anchor = firstSlot;
+      gridSel.slots = [firstSlot];
+      paintGridSel();
+      document.body.classList.add('selecting');
+    }
+    gridSel.moved = true;
+    const cell = cellFromPoint(e.clientX, e.clientY);
+    if (cell && cell.dataset.person === gridSel.personId) {
+      const slot = slotAtPoint(cell, e.clientX,
+        cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
+      extendGridSel(gridSel.personId, slot);
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  const finish = (e) => {
+    if (!gridSel.pendingCell) return;
+    const wasDragging = gridSel.dragging;
+    const pending = gridSel.pendingCell;
+    const selSlots = gridSel.slots.slice();
+    const selPerson = gridSel.personId;
+    gridSel.pendingCell = null;
+    gridSel.pointerId = null;
+    document.body.classList.remove('selecting');
+
+    if (wasDragging) {
+      // 拖選完成：保持選取，開選單
+      if (selSlots.length) {
+        paintGridSel();
+        openPicker(pending, { personId: selPerson, slots: selSlots });
+        paintGridSel(); // picker 開啟後再塗一次，避免時序問題
+      }
+      return;
+    }
+    // 單純點擊
+    const cell = cellFromPoint(e.clientX, e.clientY) || pending;
+    const slot = slotAtPoint(cell, e.clientX,
+      cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
+    handleCellClick(cell, cell.dataset.person, slot, e);
+  };
+
+  grid.addEventListener('pointerup', finish);
+  grid.addEventListener('pointercancel', () => {
+    gridSel.pendingCell = null;
+    gridSel.pointerId = null;
+    document.body.classList.remove('selecting');
+  });
+
+  // 點空白處取消選取
+  document.addEventListener('pointerdown', (e) => {
+    if (gridSel.active && !e.target.closest('#grid') && !e.target.closest('#picker')) clearGridSel();
+  });
+
+  // 長按：觸控長按 = 一次選取連續幾格（橫向）
+  attachLongPressDelegate(grid);
+}
+
+function handleCellClick(cell, personId, slot, e) {
+  if (readonly) return;
+  if (moving) {
+    placeMoving(personId, slot);
+    return;
+  }
+  if (gridSel.active && gridSel.slots.length > 1) {
+    openPicker(cell, { personId, slots: gridSel.slots.slice() });
+    return;
+  }
+  if (selectedTaskId) {
+    const id = selectedTaskId;
+    commit(() => { state.assignments[key(personId, slot)] = id; });
+    if (!e.shiftKey) clearSelectedTask();
+    return;
+  }
+  const taskId = state.assignments[key(personId, slot)];
+  openPicker(cell, {
+    personId,
+    slots: gridSel.active && gridSel.slots.length ? gridSel.slots.slice() : [slot],
+    currentTaskId: taskId,
+  });
+}
+
+// 長按（觸控）：開始選取，之後手指橫向拖動擴充
+function attachLongPressDelegate(grid) {
+  let timer = null;
+  let person = null;
+  let startSlot = null;
+
+  grid.addEventListener('touchstart', (e) => {
+    if (readonly || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const cell = cellFromPoint(t.clientX, t.clientY);
+    if (!cell) return;
+    startSlot = slotAtPoint(cell, t.clientX,
+      cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
+    person = cell.dataset.person;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (navigator.vibrate) navigator.vibrate(12);
+      gridSel.active = true;
+      gridSel.personId = person;
+      gridSel.anchor = startSlot;
+      gridSel.slots = [startSlot];
+      paintGridSel();
+      document.body.classList.add('selecting');
+    }, 420);
+  }, { passive: true });
+
+  grid.addEventListener('touchmove', (e) => {
+    if (!gridSel.active || !gridSel.personId) { clearTimeout(timer); return; }
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const cell = cellFromPoint(t.clientX, t.clientY);
+    if (!cell || cell.dataset.person !== gridSel.personId) return;
+    const slot = slotAtPoint(cell, t.clientX,
+      cell.dataset.slots ? cell.dataset.slots.split(',') : [cell.dataset.slot]);
+    extendGridSel(gridSel.personId, slot);
+  }, { passive: true });
+
+  grid.addEventListener('touchend', () => {
+    clearTimeout(timer);
+    if (gridSel.active && gridSel.slots.length) {
+      const el = document.querySelector(`[data-person="${gridSel.personId}"][data-slot="${gridSel.slots[0]}"]`);
+      if (el) openPicker(el, { personId: gridSel.personId, slots: gridSel.slots.slice() });
+    }
+  });
+
+  grid.addEventListener('touchcancel', () => {
+    clearTimeout(timer);
+    document.body.classList.remove('selecting');
   });
 }
 
@@ -1169,6 +1511,8 @@ function applyDrop(payload, personId, startSlot) {
   if (!targets.length) return;
   if (payload.type === 'move' && payload.personId === personId && payload.slots[0] === startSlot) return;
 
+  // 放開時清掉選取
+  clearGridSel();
   commit(() => {
     if (payload.type === 'move' && payload.slots) {
       for (const s of payload.slots) delete state.assignments[key(payload.personId, s)];
@@ -1248,6 +1592,7 @@ function renderAll() {
   renderGrid();
   renderIssues();
   $('undoBtn').disabled = undoStack.length === 0;
+  requestAnimationFrame(refreshScrollShadows);
 }
 
 /* ---------------- picker popup ---------------- */
@@ -1265,10 +1610,13 @@ function openPicker(anchor, ctx) {
   const person = personById(ctx.personId);
   const from = ctx.slots[0];
   const to = addMin(ctx.slots[ctx.slots.length - 1], SLOT_MIN);
+  const n = ctx.slots.length;
 
   const title = document.createElement('div');
   title.className = 'pk-title';
-  title.textContent = `${person ? person.name : ''} · ${from}–${to}`;
+  title.textContent = n > 1
+    ? `${person ? person.name : ''} · ${from}–${to}（選了 ${n} 格）`
+    : `${person ? person.name : ''} · ${from}–${to}`;
   picker.append(title);
 
   if (!state.tasks.length) {
@@ -1296,6 +1644,7 @@ function openPicker(anchor, ctx) {
     }
     b.addEventListener('click', () => {
       closePicker();
+      clearGridSel();
       commit(() => {
         for (const s of ctx.slots) state.assignments[key(ctx.personId, s)] = t.id;
       });
@@ -1315,6 +1664,7 @@ function openPicker(anchor, ctx) {
     move.textContent = `搬移這 ${ctx.slots.length > 1 ? `${(ctx.slots.length * SLOT_MIN) / 60} 小時` : '格'}…`;
     move.addEventListener('click', () => {
       closePicker();
+      clearGridSel();
       moving = { personId: ctx.personId, slots: ctx.slots.slice() };
       document.body.classList.add('moving');
       setSaveStatus('搬移模式：點目標格放下（Esc 取消）');
@@ -1326,6 +1676,7 @@ function openPicker(anchor, ctx) {
     clr.textContent = ctx.slots.length > 1 ? `清空這 ${(ctx.slots.length * SLOT_MIN) / 60} 小時` : '清空這一格';
     clr.addEventListener('click', () => {
       closePicker();
+      clearGridSel();
       commit(() => {
         for (const s of ctx.slots) delete state.assignments[key(ctx.personId, s)];
       });
@@ -1726,11 +2077,45 @@ function toggleZoom() {
   zoomed = !zoomed;
   const btn = $('fitBtn');
   btn.textContent = zoomed ? '全顯示' : '放大';
-  btn.title = zoomed
-    ? '切換：全部時間擠在畫面內 / 放大可左右滾動'
-    : '切換：全部時間擠在畫面內 / 放大可左右滾動';
   btn.classList.toggle('on', zoomed);
   renderGrid();
+  requestAnimationFrame(refreshScrollShadows);
+}
+
+/* ---------------- 滾動陰影 ---------------- */
+function updateScrollShadow(el) {
+  if (!el) return;
+  const canX = el.scrollWidth > el.clientWidth + 1;
+  const canY = el.scrollHeight > el.clientHeight + 1;
+  const left = el.scrollLeft > 1;
+  const right = el.scrollLeft < el.scrollWidth - el.clientWidth - 1;
+  const top = el.scrollTop > 1;
+  const bottom = el.scrollTop < el.scrollHeight - el.clientHeight - 1;
+
+  const parts = [];
+  if (canX && left) parts.push('inset 16px 0 14px -14px rgba(16,24,40,0.32)');
+  if (canX && right) parts.push('inset -16px 0 14px -14px rgba(16,24,40,0.32)');
+  if (canY && top) parts.push('inset 0 16px 14px -14px rgba(16,24,40,0.28)');
+  if (canY && bottom) parts.push('inset 0 -16px 14px -14px rgba(16,24,40,0.28)');
+  el.style.boxShadow = parts.join(', ');
+}
+
+function watchScrollables() {
+  const targets = [document.querySelector('.board'), document.querySelector('.panel'), document.querySelector('.issues')];
+  for (const el of targets) {
+    if (!el || el.dataset.shadowWatched) continue;
+    el.dataset.shadowWatched = '1';
+    el.classList.add('scroll-shadow');
+    el.addEventListener('scroll', () => updateScrollShadow(el), { passive: true });
+    const ro = new ResizeObserver(() => updateScrollShadow(el));
+    ro.observe(el);
+    updateScrollShadow(el);
+  }
+}
+
+function refreshScrollShadows() {
+  watchScrollables();
+  for (const el of document.querySelectorAll('[data-shadow-watched]')) updateScrollShadow(el);
 }
 
 /* ---------------- inputs / bind ---------------- */
@@ -1829,6 +2214,7 @@ function bind() {
   syncInputs();
   bind();
   bindMobile();
+  bindGridInteraction();
   syncRuleFields();
 
   if (shared && shared.error) {

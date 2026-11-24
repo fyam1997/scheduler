@@ -1318,21 +1318,6 @@ function buildEmptyCell(person, slot, colStart, rowIndex) {
     return el;
   }
 
-  const msgs = warnSlots.get(slot);
-  if (msgs) {
-    el.classList.add('need');
-    el.title = [...new Set(msgs)].join('\n');
-  }
-  const cellMsgs = warnCells.get(key(person.id, slot));
-  if (cellMsgs) {
-    el.classList.add('has-warn');
-    el.title = [...new Set(cellMsgs)].join('\n');
-    const badge = document.createElement('span');
-    badge.className = 'warn-badge';
-    badge.textContent = '⚠';
-    badge.title = [...new Set(cellMsgs)].join('\n');
-    el.append(badge);
-  }
   if (selectedTaskId) el.classList.add('fillable');
 
   el.dataset.empty = '1';
@@ -1375,18 +1360,6 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
     dur.className = 'block-dur';
     dur.textContent = `${hrs % 1 === 0 ? hrs : hrs.toFixed(1)}h`;
     el.append(dur);
-  }
-
-  const cellWarn = [...new Set(blockSlots.flatMap((s) => warnCells.get(key(person.id, s)) || []))];
-  if (cellWarn.length) {
-    el.classList.add('has-warn');
-    const firstIdx = blockSlots.findIndex((s) => warnCells.has(key(person.id, s)));
-    const badge = document.createElement('span');
-    badge.className = 'warn-badge';
-    badge.textContent = '⚠';
-    badge.title = cellWarn.join('\n');
-    badge.style.left = `calc(${Math.max(0, firstIdx)} * (100% / ${blockSlots.length}) + 3px)`;
-    el.append(badge);
   }
 
   el.title = `${task.name} ${blockSlots[0]}–${addMin(blockSlots[blockSlots.length - 1], SLOT_MIN)}（點選可改／拖選多格）`;

@@ -339,7 +339,10 @@ body.readonly .person-name.has-warn { cursor: default; }
 }
 .issue:hover { filter: brightness(0.98); }
 
-.board { flex: 1; overflow: auto; padding: 14px; }
+/* The board is the scroll container. Its spacing lives on the grid's margin so
+   that no padding strip can scroll out from under the sticky name column: the
+   sticky cells always pin to the scrollport edge itself. */
+.board { flex: 1; overflow: auto; padding: 0; }
 
 .grid {
   display: grid;
@@ -349,7 +352,8 @@ body.readonly .person-name.has-warn { cursor: default; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  width: 100%;
+  width: auto;
+  margin: 14px;
   /* Let one-finger drags pan the board; a long press switches to selection.
      pinch-zoom keeps two-finger zoom working on phones. */
   touch-action: pan-x pan-y pinch-zoom;
@@ -384,6 +388,8 @@ body.readonly .person-name.has-warn { cursor: default; }
   min-height: 46px;
   border-right: 1px solid var(--line-strong);
 }
+/* Corner cell: sticky on both axes with a square fill, so scrolled hour cells
+   can never peek through the top-left corner. */
 .h-corner { position: sticky; top: 0; padding: 0; }
 
 .h-hour {
@@ -889,7 +895,7 @@ body.selecting .grid { touch-action: none; }
 
   /* Grid: fit-all mode shrinks columns; enlarged mode (the default) scrolls horizontally */
   :root { --name-w: 84px; --row-h: 52px; }
-  .board { padding: 10px 6px 12px; }
+  .grid { margin: 10px 6px 12px; }
   /* Enlarged columns on a phone: 40px per half hour keeps "HH:MM" readable
      while still showing about 3.5 hours of the shift at once */
   .grid.zoomed { grid-template-columns: var(--name-w) repeat(var(--half-cols), 40px); }

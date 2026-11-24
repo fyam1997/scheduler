@@ -3,7 +3,9 @@
 /* ---------------- constants ---------------- */
 const LS_KEY = 'scheduler.state.v3';
 const SLOT_MIN = 30; // 內部精度：半小時；畫面一小時一格
-const SHARE_PREFIX = 'j1.';
+const SHARE_PREFIX = 'j2.';
+const SHARE_PREFIX_V1 = 'j1.';
+const B36 = '0123456789abcdefghijklmnopqrstuvwxyz';
 const SHARE_LIMIT = 60000; // 超過就唔出連結
 
 // 'server' = 有本機 node server（自動存檔）；'local' = 純前端，存 localStorage
@@ -58,8 +60,12 @@ function textFor(hex) {
 
 /* ---------------- day model ---------------- */
 function slots() {
-  let a = toMin(state.start);
-  let b = toMin(state.end);
+  return slotsFor(state.start, state.end);
+}
+
+function slotsFor(start, end) {
+  let a = toMin(start);
+  let b = toMin(end);
   if (b <= a) b += 1440; // 跨夜
   a = Math.floor(a / 30) * 30;
   b = Math.ceil(b / 30) * 30;
@@ -332,11 +338,141 @@ function b64decodeUtf8(s) {
 }
 
 function encodeShare(s) {
-  return SHARE_PREFIX + b64encodeUtf8(JSON.stringify(s));
+  // 工作太多（>36）就退回舊格式，避免 base36 單字元表示不夠用
+  if (s.tasks.length > 36 || s.people.length > 99) {
+    return SHARE_PREFIX_V1 + b64encodeUtf8(JSON.stringify(s));
+  }
+  const sl = slotsFor(s.start, s.end);
+  const taskIdx = new Map(s.tasks.map((t, i) => [t.id, i]));
+
+  // 每人一行字串：'-' = 空，其餘 = base36 的工作索引
+  const rows = s.people.map((p) =>
+    sl.map((slot) => {
+      const tid = s.assignments[key(p.id, slot)];
+      const i = tid != null ? taskIdx.get(tid) : undefined;
+      return i == null ? '-' : B36[i];
+    }).join(''),
+  );
+
+  const compact = {
+    t: s.title,
+    d: s.date,
+    s: s.start,
+    e: s.end,
+    // [名, 顏色(預設色留 null), 由, 到, flags]
+    p: s.people.map((p, i) => [
+      p.name,
+      p.color === PERSON_PALETTE[i % PERSON_PALETTE.length] ? null : p.color,
+      p.from || null,
+      p.to || null,
+      (p.noRunLimit ? 1 : 0) | (p.noBreak ? 2 : 0),
+    ]),
+    k: s.tasks.map((t, i) => [
+      t.name,
+      t.color === TASK_PALETTE[i % TASK_PALETTE.length] ? null : t.color,
+      t.isBreak ? 1 : 0,
+    ]),
+    r: s.rules.map((r) => {
+      if (r.type === 'cover') return ['c', taskIdx.get(r.taskId) ?? 0, r.from, r.to, r.min];
+      if (r.type === 'maxRun') return ['r', r.hours];
+      return ['s', r.from, r.to, r.hours];
+    }),
+    a: rows,
+  };
+  return SHARE_PREFIX + b64encodeUtf8(JSON.stringify(compact));
+}
+
+// j2：緊湊格式
+function decodeShareV2(payload) {
+  const obj = JSON.parse(b64decodeUtf8(payload));
+  if (!obj || typeof obj !== 'object') throw new Error('格式錯誤');
+
+  const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const hex = (v, fallback) => (/^#[0-9a-fA-F]{3,8}$/.test(String(v)) ? String(v) : fallback);
+  const time = (v, fallback) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(String(v)) ? String(v) : fallback);
+
+  const people = (Array.isArray(obj.p) ? obj.p : [])
+    .slice(0, 99)
+    .map((row, i) => {
+      if (!Array.isArray(row)) return null;
+      const person = {
+        id: `p${i}`,
+        name: str(row[0], 60) || '人手',
+        color: hex(row[1], PERSON_PALETTE[i % PERSON_PALETTE.length]),
+      };
+      const f = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(row[2])) ? String(row[2]) : '';
+      const t = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(row[3])) ? String(row[3]) : '';
+      if (f) person.from = f;
+      if (t) person.to = t;
+      const flags = Number(row[4]) || 0;
+      if (flags & 1) person.noRunLimit = true;
+      if (flags & 2) person.noBreak = true;
+      return person;
+    })
+    .filter(Boolean);
+
+  const tasks = (Array.isArray(obj.k) ? obj.k : [])
+    .slice(0, 36)
+    .map((row, i) => {
+      if (!Array.isArray(row)) return null;
+      return {
+        id: `t${i}`,
+        name: str(row[0], 60) || '工作',
+        color: hex(row[1], TASK_PALETTE[i % TASK_PALETTE.length]),
+        isBreak: Boolean(Number(row[2])),
+      };
+    })
+    .filter(Boolean);
+
+  const rules = (Array.isArray(obj.r) ? obj.r : [])
+    .slice(0, 200)
+    .map((row, i) => {
+      if (!Array.isArray(row)) return null;
+      const kind = row[0];
+      const id = `r${i}`;
+      if (kind === 'c') {
+        const ti = Number(row[1]);
+        if (!tasks[ti]) return null;
+        return { id, type: 'cover', taskId: tasks[ti].id, from: time(row[2], '09:00'), to: time(row[3], '18:00'), min: Math.min(99, Math.max(1, Number(row[4]) || 1)) };
+      }
+      if (kind === 'r') return { id, type: 'maxRun', hours: Math.min(12, Math.max(1, Number(row[1]) || 4)) };
+      if (kind === 's') return { id, type: 'rest', from: time(row[1], '11:00'), to: time(row[2], '14:00'), hours: Math.min(12, Math.max(1, Number(row[3]) || 1)) };
+      return null;
+    })
+    .filter(Boolean);
+
+  const start = time(obj.s, '09:00');
+  const end = time(obj.e, '18:00');
+  const sl = slotsFor(start, end);
+
+  const assignments = {};
+  const rows = Array.isArray(obj.a) ? obj.a : [];
+  rows.forEach((line, pi) => {
+    const person = people[pi];
+    if (!person || typeof line !== 'string') return;
+    for (let i = 0; i < sl.length && i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === '-' || ch === '.') continue;
+      const ti = B36.indexOf(ch);
+      if (ti < 0 || !tasks[ti]) continue;
+      assignments[`${person.id}|${sl[i]}`] = tasks[ti].id;
+    }
+  });
+
+  return normalize({
+    title: str(obj.t, 80) || '排班表',
+    date: /^\d{4}-\d{2}-\d{2}$/.test(String(obj.d)) ? String(obj.d) : new Date().toISOString().slice(0, 10),
+    start,
+    end,
+    people,
+    tasks,
+    rules,
+    assignments,
+  });
 }
 
 // 解出嚟嘅係不可信輸入：逐欄驗證，任何唔識嘅一律丟棄
-function decodeShare(payload) {
+function decodeShareV1(payload) {
   const raw = b64decodeUtf8(payload);
   const obj = JSON.parse(raw);
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('格式錯誤');
@@ -1160,7 +1296,8 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
   el.style.gridRow = String(rowIndex);
   el.style.background = task.isBreak ? '#eef2f8' : bgFor(task.color, 0.92);
   el.style.color = task.isBreak ? '#41506a' : textFor(task.color);
-  el.draggable = true;
+  // 時間表上的格不再可拖；搬移改用選取後「搬移」
+  el.draggable = false;
   el.dataset.person = person.id;
   el.dataset.slot = blockSlots[0];
   el.dataset.span = String(blockSlots.length);
@@ -1200,19 +1337,8 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
     el.append(badge);
   }
 
-  el.title = `${task.name} ${blockSlots[0]}–${addMin(blockSlots[blockSlots.length - 1], SLOT_MIN)}（每格可分開點／拖）`;
+  el.title = `${task.name} ${blockSlots[0]}–${addMin(blockSlots[blockSlots.length - 1], SLOT_MIN)}（點選可改／拖選多格）`;
 
-  el.addEventListener('dragstart', (e) => {
-    e.stopPropagation();
-    // 只搬移指標所在那一格，其餘格不動
-    const slot = slotAtPoint(el, e.clientX, blockSlots);
-    setDragPayload(e, { type: 'move', taskId: task.id, personId: person.id, slots: [slot] });
-    el.classList.add('dragging');
-  });
-  el.addEventListener('dragend', () => {
-    dragging = null;
-    el.classList.remove('dragging');
-  });
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     if (readonly) return;
@@ -2042,9 +2168,14 @@ function readShareFromHash() {
   const m = hash.match(/^#d=(.+)$/);
   if (!m) return null;
   const payload = m[1];
-  if (!payload.startsWith(SHARE_PREFIX)) return null;
   try {
-    return decodeShare(payload.slice(SHARE_PREFIX.length));
+    if (payload.startsWith(SHARE_PREFIX)) {
+      return decodeShareV2(payload.slice(SHARE_PREFIX.length));
+    }
+    if (payload.startsWith(SHARE_PREFIX_V1)) {
+      return decodeShareV1(payload.slice(SHARE_PREFIX_V1.length));
+    }
+    return null;
   } catch (err) {
     console.warn('分享連結解析失敗', err);
     return { error: true };

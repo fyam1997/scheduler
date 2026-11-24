@@ -232,10 +232,7 @@ body.readonly .person-name.has-warn { cursor: default; }
   border-left: 4px solid var(--task-color, var(--primary));
   border-radius: 8px;
   background: #fff;
-  cursor: grab;
 }
-.task-row:active { cursor: grabbing; }
-.task-row.dragging { opacity: 0.4; }
 .task-row.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(47, 109, 246, 0.25); background: #f6f9ff; }
 .task-row.is-break { border-left-style: dashed; background: #fbfcfe; }
 .task-row .task-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; cursor: pointer; }
@@ -474,7 +471,6 @@ body.picking-task .sl { cursor: copy; }
 body.picking-task .sl:hover { box-shadow: inset 0 0 0 2px var(--primary); background: #eef4ff; }
 body.moving .sl, body.moving .block { cursor: move; }
 body.moving .sl:hover { box-shadow: inset 0 0 0 2px var(--primary); background: #eef4ff; }
-.sl.drop-ok, .block.drop-ok { box-shadow: inset 0 0 0 2px var(--primary); background: #e9f1ff !important; }
 
 /* merged block for consecutive work */
 .block {

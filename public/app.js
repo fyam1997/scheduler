@@ -19,7 +19,6 @@ const TASK_PALETTE = ['#F2994A', '#9B51E0', '#2D9CDB', '#EB5757', '#27AE60', '#F
 let state = null;
 const undoStack = [];
 let saveTimer = null;
-let dragging = null;
 let moving = null; // touch move mode: { personId, slots[] }
 let selectedTaskId = null;
 let zoomed = false; // false = fit all hours on screen; true = enlarged with horizontal scroll
@@ -979,13 +978,12 @@ function renderLists() {
     const li = document.createElement('li');
     li.className = `task-row${t.isBreak ? ' is-break' : ''}`;
     li.style.setProperty('--task-color', t.color);
-    li.draggable = true;
     li.dataset.id = t.id;
 
     const grip = document.createElement('span');
     grip.className = 'grip';
     grip.textContent = '⋮⋮';
-    grip.title = '拖動排序（拖出右邊可放到時間表）';
+    grip.title = '拖動排序';
     grip.draggable = !readonly;
 
     const sw = document.createElement('input');
@@ -1055,14 +1053,6 @@ function renderLists() {
 
     li.append(grip, sw, name, brk, del);
 
-    li.addEventListener('dragstart', (e) => {
-      setDragPayload(e, { type: 'task', taskId: t.id });
-      li.classList.add('dragging');
-    });
-    li.addEventListener('dragend', () => {
-      li.classList.remove('dragging');
-      dragging = null;
-    });
     li.addEventListener('click', (e) => {
       if (e.target.closest('input,button,.task-name-edit')) return;
       if (selectedTaskId === t.id) {
@@ -1337,7 +1327,6 @@ function buildEmptyCell(person, slot, colStart, rowIndex) {
   if (selectedTaskId) el.classList.add('fillable');
 
   el.dataset.empty = '1';
-  attachDrop(el, person.id, slot);
   return el;
 }
 
@@ -1401,7 +1390,6 @@ function buildBlock(person, blockSlots, colStart, rowIndex) {
     });
   });
 
-  attachDrop(el, person.id, blockSlots[0]);
   return el;
 }
 
@@ -1412,29 +1400,6 @@ function slotAtPoint(el, clientX, blockSlots) {
   const ratio = (clientX - r.left) / r.width;
   const idx = Math.min(blockSlots.length - 1, Math.max(0, Math.floor(ratio * blockSlots.length)));
   return blockSlots[idx];
-}
-
-function attachDrop(el, personId, startSlot) {
-  el.addEventListener('dragover', (e) => {
-    if (readonly) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    el.classList.add('drop-ok');
-  });
-  el.addEventListener('dragleave', () => el.classList.remove('drop-ok'));
-  el.addEventListener('drop', (e) => {
-    e.preventDefault();
-    el.classList.remove('drop-ok');
-    if (readonly) return;
-    const payload = readDropPayload(e);
-    dragging = null;
-    if (!payload || !payload.taskId) return;
-    // Resolve the drop slot from the pointer position; a merged block only accepts the hovered slot
-    const span = Number(el.dataset.span || 1);
-    const blockSlots = span > 1 ? el.dataset.slots.split(',') : [startSlot];
-    const slot = slotAtPoint(el, e.clientX, blockSlots);
-    applyDrop(payload, personId, slot);
-  });
 }
 
 /* ---------------- grid interaction: click, long-press, horizontal range select ---------------- */
@@ -1681,25 +1646,6 @@ function attachLongPressDelegate(grid) {
   });
 }
 
-function applyDrop(payload, personId, startSlot) {
-  const sl = slots();
-  const idx = sl.indexOf(startSlot);
-  if (idx < 0) return;
-  const span = payload.type === 'move' && payload.slots ? payload.slots.length : 1;
-  const targets = sl.slice(idx, idx + span);
-  if (!targets.length) return;
-  if (payload.type === 'move' && payload.personId === personId && payload.slots[0] === startSlot) return;
-
-  // Clear the selection after a drop
-  clearGridSel();
-  commit(() => {
-    if (payload.type === 'move' && payload.slots) {
-      for (const s of payload.slots) delete state.assignments[key(payload.personId, s)];
-    }
-    for (const s of targets) state.assignments[key(personId, s)] = payload.taskId;
-  });
-}
-
 /* ---------------- touch move mode ---------------- */
 function placeMoving(personId, startSlot) {
   const sl = slots();
@@ -1909,27 +1855,6 @@ document.addEventListener('keydown', (e) => {
     clearSelectedTask();
   }
 });
-
-/* ---------------- drag payload ---------------- */
-function setDragPayload(e, payload) {
-  dragging = payload;
-  try {
-    e.dataTransfer.setData('text/plain', JSON.stringify(payload));
-  } catch {
-    /* Some environments block dataTransfer, so fall back to the dragging variable */
-  }
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = payload.type === 'move' ? 'move' : 'copy';
-}
-
-function readDropPayload(e) {
-  try {
-    const raw = e.dataTransfer?.getData('text/plain');
-    if (raw) return JSON.parse(raw);
-  } catch {
-    /* ignore */
-  }
-  return dragging;
-}
 
 function clearSelectedTask() {
   selectedTaskId = null;
